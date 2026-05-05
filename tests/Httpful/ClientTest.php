@@ -420,6 +420,28 @@ final class ClientTest extends TestCase
         $client->sendRequest($request);
     }
 
+    public function testHostNotFoundIncludesCurlErrorPrefix()
+    {
+        $client = new Client();
+        $request = (new Request('GET'))->withUriFromString('http://www.does.not.exists');
+
+        try {
+            $client->sendRequest($request);
+            static::fail('Expected a network exception.');
+        } catch (NetworkExceptionInterface $e) {
+            $expectedCurlMessage = \curl_strerror(\CURLE_COULDNT_RESOLVE_HOST) . ': Could not resolve host: www.does.not.exists';
+
+            static::assertStringContainsString($expectedCurlMessage, $e->getMessage());
+            static::assertSame(
+                'Unable to connect to "http://www.does.not.exists": '
+                . \CURLE_COULDNT_RESOLVE_HOST
+                . ' '
+                . $expectedCurlMessage,
+                $e->getMessage()
+            );
+        }
+    }
+
     public function testInvalidMethod()
     {
         $this->expectException(RequestExceptionInterface::class);

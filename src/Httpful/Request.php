@@ -3715,7 +3715,7 @@ class Request implements \IteratorAggregate, RequestInterface
             return [$version, null];
         }
 
-        $normalized_version = \strtolower(\str_replace(['tls', 'v'], '', \trim((string) $version)));
+        $normalized_version = \str_replace(['tls', 'v'], '', \strtolower(\trim((string) $version)));
 
         if ($normalized_version === 'default') {
             return [self::_requireCurlConstant('CURL_SSLVERSION_DEFAULT'), 0];
@@ -4082,7 +4082,7 @@ class Request implements \IteratorAggregate, RequestInterface
         $this->content_type = Mime::getFullMime($mime);
 
         if ($this->isUpload()) {
-            $this->neverSerializePayload();
+            $this->serialize_payload_method = static::SERIALIZE_PAYLOAD_NEVER;
         }
 
         return $this;
@@ -4126,7 +4126,7 @@ class Request implements \IteratorAggregate, RequestInterface
         $this->content_type = $this->expected_type;
 
         if ($this->isUpload()) {
-            $this->neverSerializePayload();
+            $this->serialize_payload_method = static::SERIALIZE_PAYLOAD_NEVER;
         }
 
         return $this;

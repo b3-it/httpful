@@ -796,11 +796,8 @@ final class ExtraCoverageExtendedTest extends TestCase
     public function testRequestInitialize(): void
     {
         $req = Request::get('http://example.com/');
-        // initialize() should not throw
         $req->initialize();
-        // On PHP 8.x, CurlHandle is an object not a resource,
-        // so hasBeenInitialized() returns false (known issue in codebase)
-        static::assertInstanceOf(Request::class, $req);
+        static::assertTrue($req->hasBeenInitialized());
         $req->close();
     }
 
@@ -812,12 +809,10 @@ final class ExtraCoverageExtendedTest extends TestCase
         static::assertInstanceOf(Request::class, $req);
     }
 
-    public function testRequestHasBeenInitializedFalse(): void
+    public function testRequestHasBeenInitializedByDefault(): void
     {
         $req = Request::get('http://example.com/');
-        // On PHP 8.x this always returns false (is_resource doesn't match CurlHandle)
-        $result = $req->hasBeenInitialized();
-        static::assertIsBool($result);
+        static::assertTrue($req->hasBeenInitialized());
     }
 
     public function testRequestHasBeenInitializedMultiFalse(): void
@@ -874,7 +869,16 @@ final class ExtraCoverageExtendedTest extends TestCase
         $req = Request::get('http://example.com/')
             ->withParams(['a' => '1', 'b' => '2'])
             ->withParam('c', '3');
-        static::assertInstanceOf(Request::class, $req);
+        static::assertSame(['a' => '1', 'b' => '2', 'c' => '3'], $req->getIterator()['params']);
+    }
+
+    public function testRequestWithUriFromStringClonesByDefault(): void
+    {
+        $req = Request::get('http://example.com/');
+        $new = $req->withUriFromString('http://other.com/');
+
+        static::assertSame('http://example.com/', $req->getUriString());
+        static::assertSame('http://other.com/', $new->getUriString());
     }
 
     public function testRequestExpectsWithFallback(): void
@@ -886,7 +890,9 @@ final class ExtraCoverageExtendedTest extends TestCase
 
     public function testRequestWithContentTypeWithFallback(): void
     {
-        $req = Request::get('http://example.com/')->withContentType(null, Mime::JSON);
+        $original = Request::get('http://example.com/');
+        $req = $original->withContentType(null, Mime::JSON);
+        static::assertNotSame($original, $req);
         static::assertSame(Mime::getFullMime(Mime::JSON), $req->getContentType());
     }
 

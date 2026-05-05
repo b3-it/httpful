@@ -15,6 +15,11 @@ use PHPUnit\Framework\TestCase;
  */
 final class CurlFeatureApiTest extends TestCase
 {
+    private static function localFixtureUrl(string $path): string
+    {
+        return 'http://' . \TEST_SERVER . '/' . ltrim($path, '/');
+    }
+
     private function setPrivateProperty(object $object, string $property, $value): void
     {
         $reflection = new \ReflectionProperty($object, $property);
@@ -326,6 +331,48 @@ final class CurlFeatureApiTest extends TestCase
         $req->close();
     }
 
+    public function testRetryDeciderDoesNotRetryConnectionRefusedWithoutMatchingMessage(): void
+    {
+        $req = Request::get('http://example.com/')
+            ->withRetry(1)
+            ->withRetryDelay(0)
+            ->withRetryConnectionRefused()
+            ->_curlPrep();
+
+        $decider = $req->_curl()->getRetryDecider();
+        $curl = new Curl();
+        $curl->error = true;
+        $curl->curlError = true;
+        $curl->curlErrorCode = \CURLE_COULDNT_CONNECT;
+        $curl->curlErrorMessage = 'No route to host';
+
+        static::assertFalse($decider($curl));
+
+        $curl->close();
+        $req->close();
+    }
+
+    public function testRetryDeciderWaitsForPositiveRetryDelay(): void
+    {
+        $req = Request::get('http://example.com/')
+            ->withRetry(1)
+            ->withRetryDelay(0.02)
+            ->_curlPrep();
+
+        $decider = $req->_curl()->getRetryDecider();
+        $curl = new Curl();
+        $curl->error = true;
+        $curl->httpError = true;
+        $curl->httpStatusCode = 503;
+
+        $startedAt = \microtime(true);
+        static::assertTrue($decider($curl));
+        static::assertGreaterThanOrEqual(0.015, \microtime(true) - $startedAt);
+
+        $curl->close();
+        $req->close();
+    }
+
     public function testRetryMaxTimeStartsAtFirstRetryDecision(): void
     {
         $req = Request::get('http://example.com/')
@@ -398,6 +445,41 @@ final class CurlFeatureApiTest extends TestCase
         static::assertSame(\CURL_SSLVERSION_TLSv1_2, $reqInteger->getIterator()['additional_curl_opts'][\CURLOPT_SSLVERSION]);
     }
 
+    public function testWithTlsVersionAcceptsNormalizedMixedCaseString(): void
+    {
+        $req = Request::get('http://example.com/')->withTlsVersion('TLSv1.2');
+
+        static::assertSame(\CURL_SSLVERSION_TLSv1_2, $req->getIterator()['additional_curl_opts'][\CURLOPT_SSLVERSION]);
+    }
+
+    public function testWithTlsVersionAllowsTls1ToTls10Bounds(): void
+    {
+        if (!\defined('CURL_SSLVERSION_MAX_TLSv1_0')) {
+            static::markTestSkipped('The installed cURL extension does not support CURL_SSLVERSION_MAX_TLSv1_0.');
+        }
+
+        $req = Request::get('http://example.com/')->withTlsVersion('1', '1.0');
+
+        static::assertSame(
+            \CURL_SSLVERSION_TLSv1 | \CURL_SSLVERSION_MAX_TLSv1_0,
+            $req->getIterator()['additional_curl_opts'][\CURLOPT_SSLVERSION]
+        );
+    }
+
+    public function testWithTlsVersionAcceptsIntegerMaximumWithoutRangeValidation(): void
+    {
+        $req = Request::get('http://example.com/')->withTlsVersion('1.2', \CURL_SSLVERSION_TLSv1_2);
+
+        static::assertSame(\CURL_SSLVERSION_TLSv1_2, $req->getIterator()['additional_curl_opts'][\CURLOPT_SSLVERSION]);
+    }
+
+    public function testWithTlsVersionRejectsTls1WithDefaultMaximum(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        Request::get('http://example.com/')->withTlsVersion('1', 'default');
+    }
+
     public function testWithTlsVersionRejectsInvalidVersion(): void
     {
         $this->expectException(\InvalidArgumentException::class);
@@ -417,9 +499,10 @@ final class CurlFeatureApiTest extends TestCase
         static::assertSame(['example.com:443:backend.internal:8443'], $opts[\CURLOPT_CONNECT_TO]);
     }
 
-    public function testResolveRejectsInvalidEntries(): void
+    public function testResolveRejectsInvalidEntriesWithPreciseMessage(): void
     {
         $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid resolve entries provided: 123');
 
         Request::get('http://example.com/')->withResolve([123]);
     }
@@ -460,6 +543,21 @@ final class CurlFeatureApiTest extends TestCase
         static::assertSame($altSvcControl, $opts[\CURLOPT_ALTSVC_CTRL]);
         static::assertSame('/tmp/hsts.cache', $opts[\CURLOPT_HSTS]);
         static::assertSame($hstsControl, $opts[\CURLOPT_HSTS_CTRL]);
+    }
+
+    public function testUseAltSvcCacheDefaultsToWritableMode(): void
+    {
+        if (!\defined('CURLOPT_ALTSVC') || !\defined('CURLOPT_ALTSVC_CTRL')) {
+            static::markTestSkipped('Alt-Svc curl options are not supported by this cURL build.');
+        }
+
+        $viaAlias = Request::get('http://example.com/')->useAltSvcCache('/tmp/altsvc.cache');
+        $direct = Request::get('http://example.com/')->withAltSvcCache('/tmp/altsvc.cache', false);
+
+        static::assertSame(
+            $direct->getIterator()['additional_curl_opts'][\CURLOPT_ALTSVC_CTRL],
+            $viaAlias->getIterator()['additional_curl_opts'][\CURLOPT_ALTSVC_CTRL]
+        );
     }
 
     public function testHttpVersionHelpersUpdateRequestState(): void
@@ -573,6 +671,33 @@ final class CurlFeatureApiTest extends TestCase
         $curl->close();
     }
 
+    public function testCurlExecResetsNobodyAfterHeadRequest(): void
+    {
+        $curl = new Curl(self::localFixtureUrl('foo.txt'));
+        $curl->setOpt(\CURLOPT_NOBODY, true);
+
+        $curl->exec();
+        $body = $curl->exec();
+
+        static::assertSame("Foobar\n", $body);
+        $curl->close();
+    }
+
+    public function testCurlBuildCookiesUsesCookieNames(): void
+    {
+        $curl = new Curl(self::localFixtureUrl('foo.txt'));
+        $curl->setCookies([
+            'session' => 'abc123',
+            'mode' => 'test',
+        ]);
+
+        $curl->exec();
+
+        $requestHeaders = (string) $curl->getInfo(\CURLINFO_HEADER_OUT);
+        static::assertStringContainsString('Cookie: session=abc123; mode=test', $requestHeaders);
+        $curl->close();
+    }
+
     public function testResponseTransferInfoHelpers(): void
     {
         $response = new Response(
@@ -627,5 +752,16 @@ final class CurlFeatureApiTest extends TestCase
         );
 
         static::assertSame(Http::HTTP_1_1, $fallbackResponse->getTransferHttpVersion());
+    }
+
+    public function testResponseWithHeaderArrayDefaultsTo200(): void
+    {
+        $response = new Response(
+            '',
+            ['Content-Type' => ['text/plain']]
+        );
+
+        static::assertSame(200, $response->getStatusCode());
+        static::assertSame('OK', $response->getReasonPhrase());
     }
 }
