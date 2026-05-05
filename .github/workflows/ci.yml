@@ -31,7 +31,7 @@ jobs:
           - '8.3'
           - '8.4'
           - '8.5'
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -40,13 +40,25 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          coverage: xdebug
+          coverage: pcov
           extensions: curl, dom, fileinfo, json, simplexml, xmlwriter, zip
           tools: composer:v2
 
+      - name: Prepare composer manifest
+        run: |
+          cp composer.json composer.ci.json
+          if [[ "${{ matrix.php }}" != '8.5' ]]; then
+            php -r '
+              $path = "composer.ci.json";
+              $json = json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+              unset($json["require-dev"]["infection/infection"]);
+              file_put_contents($path, json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL);
+            '
+          fi
+
       - name: Determine composer cache directory
         id: composer-cache
-        run: echo "directory=$(composer config cache-dir)" >> "$GITHUB_OUTPUT"
+        run: echo "directory=$(COMPOSER=composer.ci.json composer config cache-dir)" >> "$GITHUB_OUTPUT"
 
       - name: Cache composer dependencies
         uses: actions/cache@v4
@@ -60,15 +72,13 @@ jobs:
 
       - name: Install dependencies
         run: |
-          composer update --prefer-dist --no-interaction --prefer-stable
-          composer dump-autoload -o
+          COMPOSER=composer.ci.json composer update --prefer-dist --no-interaction --prefer-stable
+          COMPOSER=composer.ci.json composer dump-autoload -o
 
       - name: Audit dependencies
-        run: composer audit
+        run: COMPOSER=composer.ci.json composer audit
 
       - name: Run tests
-        env:
-          XDEBUG_MODE: coverage
         run: |
           mkdir -p build/logs
           if [[ "${{ matrix.php }}" == '8.5' ]]; then
