@@ -37,6 +37,13 @@ if ($php_major < 5.4) {
         // cleanup after ourselves -- remove log file, shut down server
         global $pid;
         unlink("./server.log");
-        posix_kill($pid, SIGKILL);
+        if (!$pid) {
+            return;
+        }
+        if (function_exists('posix_kill')) {
+            posix_kill($pid, SIGTERM);
+        } elseif (function_exists('exec') && strstr(PHP_OS, 'WIN')) {
+            exec("taskkill /F /PID $pid");
+        }
     });
 }
