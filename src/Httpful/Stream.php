@@ -7,6 +7,9 @@ namespace Httpful;
 use Psr\Http\Message\StreamInterface;
 use voku\helper\UTF8;
 
+/**
+ * @phpstan-consistent-constructor
+ */
 class Stream implements StreamInterface
 {
     /**
@@ -98,7 +101,7 @@ class Stream implements StreamInterface
     private $uri;
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $customMetadata;
 
@@ -154,7 +157,7 @@ class Stream implements StreamInterface
     /**
      * @return string
      */
-    public function __toString()
+    public function __toString(): string
     {
         try {
             $this->seek(0);
@@ -169,7 +172,7 @@ class Stream implements StreamInterface
         }
     }
 
-    public function close()
+    public function close(): void
     {
         if (isset($this->stream)) {
             if (\is_resource($this->stream)) {
@@ -216,7 +219,19 @@ class Stream implements StreamInterface
     /**
      * @return mixed
      */
-    public function getContents()
+    public function getContentsUnserialized()
+    {
+        $contents = $this->getContents();
+
+        if ($this->serialized) {
+            /** @noinspection UnserializeExploitsInspection */
+            $contents = \unserialize($contents, []);
+        }
+
+        return $contents;
+    }
+
+    public function getContents(): string
     {
         if (!isset($this->stream)) {
             throw new \RuntimeException('Stream is detached');
@@ -225,11 +240,6 @@ class Stream implements StreamInterface
         $contents = \stream_get_contents($this->stream);
         if ($contents === false) {
             throw new \RuntimeException('Unable to read stream contents');
-        }
-
-        if ($this->serialized) {
-            /** @noinspection UnserializeExploitsInspection */
-            $contents = \unserialize($contents, []);
         }
 
         return $contents;
@@ -263,7 +273,7 @@ class Stream implements StreamInterface
     /**
      * @return int|null
      */
-    public function getSize()
+    public function getSize(): ?int
     {
         if ($this->size !== null) {
             return $this->size;
@@ -279,7 +289,7 @@ class Stream implements StreamInterface
         }
 
         $stats = \fstat($this->stream);
-        if ($stats !== false && isset($stats['size'])) {
+        if ($stats !== false) {
             $this->size = $stats['size'];
 
             return $this->size;
@@ -346,7 +356,7 @@ class Stream implements StreamInterface
     /**
      * @return void
      */
-    public function rewind()
+    public function rewind(): void
     {
         $this->seek(0);
     }
@@ -357,7 +367,7 @@ class Stream implements StreamInterface
      *
      * @return void
      */
-    public function seek($offset, $whence = \SEEK_SET)
+    public function seek($offset, $whence = \SEEK_SET): void
     {
         $whence = (int) $whence;
 
@@ -486,7 +496,7 @@ class Stream implements StreamInterface
             $stream = static::create();
         }
 
-        \assert($stream instanceof self);
+        \assert($stream instanceof StreamInterface);
 
         return $stream;
     }

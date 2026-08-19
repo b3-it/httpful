@@ -8,15 +8,25 @@ Forked from [nategood/httpful](https://github.com/nategood/httpful) and [vogu/ht
 
 Features
 
- - Readable HTTP Method Support (GET, PUT, POST, DELETE, HEAD, PATCH and OPTIONS)
+ - Readable HTTP Method Support (GET, PUT, POST, DELETE, HEAD, PATCH, OPTIONS and QUERY)
  - Custom Headers
  - Automatic "Smart" Parsing
  - Automatic Payload Serialization
  - Basic Auth
+ - Bearer Token Auth
  - Client Side Certificate Auth (SSL)
+ - Retry Configuration (count, delay, max time, all-errors, connection-refused)
+ - Advanced TLS Configuration (CA bundle / path, pinned public key, TLS version)
+ - Cookie Persistence (cookie file / cookie jar)
+ - Modern HTTP Version Helpers (HTTP/2 prior knowledge, HTTP/3, HTTP/3 only)
+ - Alt-Svc / HSTS Cache Helpers
+ - Proxy / Routing Helpers (no-proxy, proxy tunnel, resolve, connect-to)
  - Request "Download"
+ - Async Request Helper (`Request::sendAsync()`)
  - Request "Templates"
  - Parallel Request (via curl_multi)
+ - Transfer Metadata Helpers
+ - Curl-Style Alias Helpers (`downloadTo()`, `authenticateWith*()`, `useHttp*()`, ...)
  - PSR-3: Logger Interface
  - PSR-7: HTTP Message Interface
  - PSR-17: HTTP Factory Interface
@@ -77,11 +87,44 @@ $multi->start();
 //print_r($results);
 ```
 
+```php
+<?php
+
+$promise = \Httpful\Request::get('https://api.example.com/items')
+    ->authenticateWithBearerToken('secret-token')
+    ->sendAsync();
+
+$response = $promise->wait();
+
+echo $response->getCode() . "\n";
+```
+
+```php
+<?php
+
+$response = \Httpful\Request::get('https://api.example.com/items')
+    ->withBearerToken('secret-token')
+    ->withRetry(3)
+    ->withRetryDelay(1)
+    ->withRetryMaxTime(10)
+    ->withCookieJar('/tmp/httpful.cookies')
+    ->withCaBundle('/etc/ssl/certs/ca-bundle.crt')
+    ->withHttp2PriorKnowledge()
+    ->send();
+
+echo $response->getEffectiveUrl() . "\n";
+echo $response->getTransferHttpVersion() . "\n";
+echo $response->getTotalTime() . "\n";
+```
+
 # Installation
 
 ```shell
 composer require b3-it/httpful
 ```
+
+Requires PHP 8.0+.
+Compared with 3.1.0, the only intended breaking change is the PHP 8.0 minimum; the new request and response helpers are additive.
 
 ## Handlers
 
@@ -149,4 +192,3 @@ Finally, you must register this handler for a particular mime type.
 ```
 
 After this registering the handler in your source code, by default, any responses with a mime type of text/csv should be parsed by this handler.
-

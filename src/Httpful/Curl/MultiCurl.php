@@ -7,10 +7,7 @@ namespace Httpful\Curl;
  */
 final class MultiCurl
 {
-    /**
-     * @var resource
-     */
-    private $multiCurl;
+    private ?\CurlMultiHandle $multiCurl = null;
 
     /**
      * @var Curl[]
@@ -63,18 +60,13 @@ final class MultiCurl
     private $retry;
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $cookies = [];
 
     public function __construct()
     {
-        $multiCurl = \curl_multi_init();
-        if ($multiCurl === false) {
-            throw new \RuntimeException('curl_multi_init() returned false!');
-        }
-
-        $this->multiCurl = $multiCurl;
+        $this->multiCurl = \curl_multi_init();
     }
 
     public function __destruct()
@@ -117,15 +109,16 @@ final class MultiCurl
             $curl->close();
         }
 
-        if (\is_resource($this->multiCurl)) {
+        if ($this->multiCurl !== null) {
             \curl_multi_close($this->multiCurl);
+            $this->multiCurl = null;
         }
     }
 
     /**
      * @param callable $callback
      *
-     * @return $this;
+     * @return $this
      */
     public function complete($callback)
     {
@@ -232,7 +225,7 @@ final class MultiCurl
     }
 
     /**
-     * @param array $cookies
+     * @param array<string, mixed> $cookies
      *
      * @return $this
      */
@@ -282,23 +275,26 @@ final class MultiCurl
         }
 
         for ($i = 0; $i < $concurrency; ++$i) {
-            $curlOrNull = \array_shift($this->curls);
-            if ($curlOrNull !== null) {
-                $this->initHandle($curlOrNull);
+            $curl = \array_shift($this->curls);
+            if ($curl === null) {
+                break;
             }
+
+            $this->initHandle($curl);
         }
 
+        $multiCurl = $this->getMultiCurlHandle();
         $active = null;
         do {
             // Wait for activity on any curl_multi connection when curl_multi_select (libcurl) fails to correctly block.
             // https://bugs.php.net/bug.php?id=63411
-            if ($active && \curl_multi_select($this->multiCurl) === -1) {
+            if ($active && \curl_multi_select($multiCurl) === -1) {
                 \usleep(250);
             }
 
-            \curl_multi_exec($this->multiCurl, $active);
+            \curl_multi_exec($multiCurl, $active);
 
-            while (!(($info_array = \curl_multi_info_read($this->multiCurl)) === false)) {
+            while (!(($info_array = \curl_multi_info_read($multiCurl)) === false)) {
                 if ($info_array['msg'] === \CURLMSG_DONE) {
                     foreach ($this->activeCurls as $key => $curl) {
                         $curlRes = $curl->getCurl();
@@ -315,9 +311,9 @@ final class MultiCurl
 
                             if ($curl->attemptRetry()) {
                                 // Remove completed handle before adding again in order to retry request.
-                                \curl_multi_remove_handle($this->multiCurl, $curlRes);
+                                \curl_multi_remove_handle($multiCurl, $curlRes);
 
-                                $curlm_error_code = \curl_multi_add_handle($this->multiCurl, $curlRes);
+                                $curlm_error_code = \curl_multi_add_handle($multiCurl, $curlRes);
                                 if ($curlm_error_code !== \CURLM_OK) {
                                     throw new \ErrorException(
                                         'cURL multi add handle error: ' . \curl_multi_strerror($curlm_error_code)
@@ -331,12 +327,9 @@ final class MultiCurl
 
                                 // Start new requests before removing the handle of the completed one.
                                 while (\count($this->curls) >= 1 && \count($this->activeCurls) < $this->concurrency) {
-                                    $curlOrNull = \array_shift($this->curls);
-                                    if ($curlOrNull !== null) {
-                                        $this->initHandle($curlOrNull);
-                                    }
+                                    $this->initHandle(\array_shift($this->curls));
                                 }
-                                \curl_multi_remove_handle($this->multiCurl, $curlRes);
+                                \curl_multi_remove_handle($multiCurl, $curlRes);
 
                                 // Clean up completed instance.
                                 $curl->close();
@@ -371,7 +364,7 @@ final class MultiCurl
     }
 
     /**
-     * @return false|resource
+     * @return \CurlMultiHandle|null
      */
     public function getMultiCurl()
     {
@@ -413,12 +406,17 @@ final class MultiCurl
             throw new \ErrorException('cURL multi add handle error from curl: curl === false');
         }
 
-        $curlm_error_code = \curl_multi_add_handle($this->multiCurl, $curlRes);
+        $curlm_error_code = \curl_multi_add_handle($this->getMultiCurlHandle(), $curlRes);
         if ($curlm_error_code !== \CURLM_OK) {
             throw new \ErrorException('cURL multi add handle error: ' . \curl_multi_strerror($curlm_error_code));
         }
 
-        $this->activeCurls[$curl->getId()] = $curl;
+        $curlId = $curl->getId();
+        if ($curlId === null) {
+            throw new \ErrorException('cURL multi add handle error: curl id === null');
+        }
+
+        $this->activeCurls[$curlId] = $curl;
         $curl->call($curl->beforeSendCallback);
     }
 
@@ -434,5 +432,14 @@ final class MultiCurl
         $curl->setId($this->nextCurlId);
         $curl->setChildOfMultiCurl(true);
         $this->curls[$this->nextCurlId] = $curl;
+    }
+
+    private function getMultiCurlHandle(): \CurlMultiHandle
+    {
+        if ($this->multiCurl === null) {
+            throw new \LogicException('cURL multi handle is not initialized.');
+        }
+
+        return $this->multiCurl;
     }
 }

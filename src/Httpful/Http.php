@@ -23,6 +23,13 @@ class Http
 
     const PUT = 'PUT';
 
+    /**
+     * The QUERY method (RFC 10008) asks a resource to perform a query described
+     * by the request content. Unlike POST it is safe and idempotent, and unlike
+     * GET it carries a request body.
+     */
+    const QUERY = 'QUERY';
+
     const TRACE = 'TRACE';
 
     const HTTP_1_0 = '1.0';
@@ -31,8 +38,10 @@ class Http
 
     const HTTP_2_0 = '2';
 
+    const HTTP_3 = '3';
+
     /**
-     * @return array
+     * @return list<string>
      */
     public static function allMethods(): array
     {
@@ -45,11 +54,12 @@ class Http
             self::OPTIONS,
             self::TRACE,
             self::PATCH,
+            self::QUERY,
         ];
     }
 
     /**
-     * @return array list of (always) idempotent HTTP methods
+     * @return list<string> list of (always) idempotent HTTP methods
      */
     public static function idempotentMethods(): array
     {
@@ -61,6 +71,7 @@ class Http
             self::OPTIONS,
             self::TRACE,
             self::PATCH,
+            self::QUERY,
         ];
     }
 
@@ -133,7 +144,7 @@ class Http
     }
 
     /**
-     * @return array of HTTP method strings
+     * @return list<string> of HTTP method strings
      */
     public static function safeMethods(): array
     {
@@ -142,6 +153,7 @@ class Http
             self::GET,
             self::OPTIONS,
             self::TRACE,
+            self::QUERY,
         ];
     }
 
@@ -152,8 +164,8 @@ class Http
      * - metadata: Array of custom metadata.
      * - size: Size of the stream.
      *
-     * @param mixed $resource
-     * @param array $options
+     * @param mixed               $resource
+     * @param array<string, mixed> $options
      *
      * @throws \InvalidArgumentException if the $resource arg is not valid
      *
@@ -214,7 +226,7 @@ class Http
     /**
      * get all response-codes
      *
-     * @return array
+     * @return array<int, string>
      */
     private static function responseCodes(): array
     {

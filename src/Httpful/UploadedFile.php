@@ -10,7 +10,7 @@ use Psr\Http\Message\UploadedFileInterface;
 class UploadedFile implements UploadedFileInterface
 {
     /**
-     * @var array
+     * @var array<int, int>
      */
     const ERRORS = [
         \UPLOAD_ERR_OK         => 1,
@@ -60,10 +60,10 @@ class UploadedFile implements UploadedFileInterface
 
     /**
      * @param resource|StreamInterface|string $streamOrFile
-     * @param int                             $size
-     * @param int                             $errorStatus
-     * @param string|null                     $clientFilename
-     * @param string|null                     $clientMediaType
+     * @param mixed                          $size
+     * @param mixed                          $errorStatus
+     * @param mixed                          $clientFilename
+     * @param mixed                          $clientMediaType
      */
     public function __construct(
         $streamOrFile,
@@ -122,7 +122,7 @@ class UploadedFile implements UploadedFileInterface
     /**
      * @return string|null
      */
-    public function getClientFilename()
+    public function getClientFilename(): ?string
     {
         return $this->clientFilename;
     }
@@ -130,7 +130,7 @@ class UploadedFile implements UploadedFileInterface
     /**
      * @return string|null
      */
-    public function getClientMediaType()
+    public function getClientMediaType(): ?string
     {
         return $this->clientMediaType;
     }
@@ -172,11 +172,11 @@ class UploadedFile implements UploadedFileInterface
     }
 
     /**
-     * @param string $targetPath
+     * @param mixed $targetPath
      *
      * @return void
      */
-    public function moveTo($targetPath)
+    public function moveTo($targetPath): void
     {
         $this->_validateActive();
 

@@ -10,27 +10,27 @@ use Psr\Http\Message\UploadedFileInterface;
 class ServerRequest extends Request implements ServerRequestInterface
 {
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $attributes = [];
 
     /**
-     * @var array
+     * @var array<string, string>
      */
     private $cookieParams = [];
 
     /**
-     * @var array|object|null
+     * @var array<string, mixed>|object|null
      */
     private $parsedBody;
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $queryParams = [];
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $serverParams;
 
@@ -40,15 +40,15 @@ class ServerRequest extends Request implements ServerRequestInterface
     private $uploadedFiles = [];
 
     /**
-     * @param string|null $method       Http Method
-     * @param string|null $mime         Mime Type to Use
-     * @param static|null $template     "Request"-template object
-     * @param array       $serverParams Typically the $_SERVER (superglobal)
+     * @param string|null         $method       Http Method
+     * @param string|null         $mime         Mime Type to Use
+     * @param Request|null        $template     "Request"-template object
+     * @param array<string,mixed> $serverParams Typically the $_SERVER (superglobal)
      */
     public function __construct(
-        string $method = null,
-        string $mime = null,
-        self $template = null,
+        ?string $method = null,
+        ?string $mime = null,
+        ?Request $template = null,
         array $serverParams = []
     ) {
         $this->serverParams = $serverParams;
@@ -57,22 +57,22 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @param string $attribute
+     * @param string $name
      * @param mixed  $default
      *
      * @return mixed|null
      */
-    public function getAttribute($attribute, $default = null)
+    public function getAttribute($name, $default = null)
     {
-        if (\array_key_exists($attribute, $this->attributes) === false) {
+        if (\array_key_exists($name, $this->attributes) === false) {
             return $default;
         }
 
-        return $this->attributes[$attribute];
+        return $this->attributes[$name];
     }
 
     /**
-     * @return array
+     * @return array<string, mixed>
      */
     public function getAttributes(): array
     {
@@ -80,7 +80,7 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @return array
+     * @return array<string, string>
      */
     public function getCookieParams(): array
     {
@@ -88,7 +88,7 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @return array|object|null
+     * @return array<string, mixed>|object|null
      */
     public function getParsedBody()
     {
@@ -96,7 +96,7 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @return array
+     * @return array<string, mixed>
      */
     public function getQueryParams(): array
     {
@@ -104,7 +104,7 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @return array
+     * @return array<string, mixed>
      */
     public function getServerParams(): array
     {
@@ -112,7 +112,7 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @return array
+     * @return array<string, UploadedFileInterface>
      */
     public function getUploadedFiles(): array
     {
@@ -120,25 +120,25 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @param string $attribute
+     * @param string $name
      * @param mixed  $value
      *
      * @return static
      */
-    public function withAttribute($attribute, $value): self
+    public function withAttribute($name, $value): self
     {
         $new = clone $this;
-        $new->attributes[$attribute] = $value;
+        $new->attributes[$name] = $value;
 
         return $new;
     }
 
     /**
-     * @param array $cookies
+     * @param array<string, string> $cookies
      *
      * @return ServerRequest|ServerRequestInterface
      */
-    public function withCookieParams(array $cookies)
+    public function withCookieParams(array $cookies): ServerRequestInterface
     {
         $new = clone $this;
         $new->cookieParams = $cookies;
@@ -147,11 +147,11 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @param array|object|null $data
+     * @param mixed $data
      *
      * @return ServerRequest|ServerRequestInterface
      */
-    public function withParsedBody($data)
+    public function withParsedBody($data): ServerRequestInterface
     {
         if (
             !\is_array($data)
@@ -170,11 +170,11 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @param array $query
+     * @param array<string, mixed> $query
      *
      * @return ServerRequestInterface|static
      */
-    public function withQueryParams(array $query)
+    public function withQueryParams(array $query): ServerRequestInterface
     {
         $new = clone $this;
         $new->queryParams = $query;
@@ -183,11 +183,11 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @param array $uploadedFiles
+     * @param array<string, UploadedFileInterface> $uploadedFiles
      *
      * @return ServerRequestInterface|static
      */
-    public function withUploadedFiles(array $uploadedFiles)
+    public function withUploadedFiles(array $uploadedFiles): ServerRequestInterface
     {
         $new = clone $this;
         $new->uploadedFiles = $uploadedFiles;
@@ -196,18 +196,18 @@ class ServerRequest extends Request implements ServerRequestInterface
     }
 
     /**
-     * @param string $attribute
+     * @param string $name
      *
      * @return static
      */
-    public function withoutAttribute($attribute): self
+    public function withoutAttribute($name): self
     {
-        if (\array_key_exists($attribute, $this->attributes) === false) {
+        if (\array_key_exists($name, $this->attributes) === false) {
             return $this;
         }
 
         $new = clone $this;
-        unset($new->attributes[$attribute]);
+        unset($new->attributes[$name]);
 
         return $new;
     }

@@ -56,7 +56,7 @@ final class Curl
     public $httpStatusCode = 0;
 
     /**
-     * @var bool|string
+     * @var null|bool|string
      */
     public $rawResponse;
 
@@ -110,10 +110,7 @@ final class Curl
      */
     public $request;
 
-    /**
-     * @var resource
-     */
-    private $curl;
+    private \CurlHandle|false $curl;
 
     /**
      * @var int|string|null
@@ -126,7 +123,7 @@ final class Curl
     private $rawResponseHeaders = '';
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $responseCookies = [];
 
@@ -151,7 +148,7 @@ final class Curl
     private $url;
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $cookies = [];
 
@@ -204,7 +201,7 @@ final class Curl
     }
 
     /**
-     * @param callable $callback
+     * @param callable|null $callback
      *
      * @return $this
      */
@@ -242,13 +239,14 @@ final class Curl
      */
     public function close()
     {
-        if (\is_resource($this->curl)) {
+        if ($this->curl !== false) {
             \curl_close($this->curl);
+            $this->curl = false;
         }
     }
 
     /**
-     * @param callable $callback
+     * @param callable|null $callback
      *
      * @return $this
      */
@@ -316,7 +314,7 @@ final class Curl
     }
 
     /**
-     * @param callable $callback
+     * @param callable|null $callback
      *
      * @return $this
      */
@@ -328,7 +326,7 @@ final class Curl
     }
 
     /**
-     * @param false|resource|null $ch
+     * @param \CurlHandle|false|null $ch
      *
      * @return mixed returns the value provided by parseResponse
      */
@@ -339,10 +337,11 @@ final class Curl
         if ($ch === false || $ch === null) {
             $this->responseCookies = [];
             $this->call($this->beforeSendCallback);
-            $this->rawResponse = \curl_exec($this->curl);
-            $this->curlErrorCode = \curl_errno($this->curl);
-            $this->curlErrorMessage = \curl_error($this->curl);
-        } elseif ($ch !== null) {
+            $curl = $this->getCurlHandle();
+            $this->rawResponse = \curl_exec($curl);
+            $this->curlErrorCode = \curl_errno($curl);
+            $this->curlErrorMessage = \curl_error($curl);
+        } else {
             $this->rawResponse = \curl_multi_getcontent($ch);
             $this->curlErrorMessage = \curl_error($ch);
         }
@@ -449,7 +448,7 @@ final class Curl
     }
 
     /**
-     * @return false|resource
+     * @return \CurlHandle|false
      */
     public function getCurl()
     {
@@ -513,7 +512,7 @@ final class Curl
     }
 
     /**
-     * @return false|resource|null
+     * @return resource|false|null
      */
     public function getFileHandle()
     {
@@ -543,18 +542,16 @@ final class Curl
      */
     public function getInfo($opt = null)
     {
-        $args = [];
-        $args[] = $this->curl;
-
-        if (\func_num_args()) {
-            $args[] = $opt;
+        $curl = $this->getCurlHandle();
+        if (\func_num_args() === 0) {
+            return \curl_getinfo($curl);
         }
 
-        return \curl_getinfo(...$args);
+        return \curl_getinfo($curl, $opt);
     }
 
     /**
-     * @return bool|string
+     * @return null|bool|string
      */
     public function getRawResponse()
     {
@@ -588,7 +585,7 @@ final class Curl
     }
 
     /**
-     * @return array
+     * @return array<string, mixed>
      */
     public function getResponseCookies()
     {
@@ -660,7 +657,7 @@ final class Curl
     }
 
     /**
-     * @param callable $callback
+     * @param callable|null $callback
      *
      * @return $this
      */
@@ -677,7 +674,7 @@ final class Curl
      */
     public function reset()
     {
-        if (\function_exists('curl_reset') && \is_resource($this->curl)) {
+        if ($this->curl !== false) {
             \curl_reset($this->curl);
         } else {
             $this->curl = \curl_init();
@@ -775,7 +772,7 @@ final class Curl
     }
 
     /**
-     * @param array $cookies
+     * @param array<string, mixed> $cookies
      *
      * @return $this
      */
@@ -850,7 +847,7 @@ final class Curl
      */
     public function setOpt($option, $value)
     {
-        return \curl_setopt($this->curl, $option, $value);
+        return \curl_setopt($this->getCurlHandle(), $option, $value);
     }
 
     /**
@@ -866,7 +863,7 @@ final class Curl
     }
 
     /**
-     * @param array $options
+     * @param array<int, mixed> $options
      *
      * @return bool
      *              <p>Returns true if all options were successfully set. If an option could not be successfully set,
@@ -1016,9 +1013,11 @@ final class Curl
     public function setRetry($retry)
     {
         if (\is_callable($retry)) {
+            $this->remainingRetries = 0;
             $this->retryDecider = $retry;
         } elseif (\is_int($retry)) {
             $maximum_number_of_retries = $retry;
+            $this->retryDecider = null;
             $this->remainingRetries = $maximum_number_of_retries;
         }
 
@@ -1039,7 +1038,7 @@ final class Curl
 
     /**
      * @param string $url
-     * @param mixed  $mixed_data
+     * @param scalar|array<array-key,scalar> $mixed_data
      *
      * @return $this
      */
@@ -1071,7 +1070,7 @@ final class Curl
     }
 
     /**
-     * @param callable $callback
+     * @param callable|null $callback
      *
      * @return $this
      */
@@ -1142,7 +1141,7 @@ final class Curl
 
     /**
      * @param string $url
-     * @param mixed  $mixed_data
+     * @param scalar|array<array-key,scalar> $mixed_data
      *
      * @return string
      */
@@ -1153,7 +1152,7 @@ final class Curl
 
         if (!empty($mixed_data)) {
             $query_mark = \strpos($url, '?') > 0 ? '&' : '?';
-            if (\is_string($mixed_data)) {
+            if (\is_scalar($mixed_data)) {
                 $query_string .= $query_mark . $mixed_data;
             } elseif (\is_array($mixed_data)) {
                 $query_string .= $query_mark . \http_build_query($mixed_data, '', '&');
@@ -1220,7 +1219,16 @@ final class Curl
         // PHP script from stdin. Using null causes "Warning: curl_setopt():
         // supplied argument is not a valid File-Handle resource".
         if (!\defined('STDOUT')) {
-            \define('STDOUT', \fopen('php://stdout', 'wb'));
+            $stdout = \fopen('php://stdout', 'wb');
+            if ($stdout === false) {
+                throw new \RuntimeException('Unable to open STDOUT stream.');
+            }
+
+            \define('STDOUT', $stdout);
+        }
+
+        if (!\is_resource(\STDOUT)) {
+            throw new \RuntimeException('STDOUT stream is not available.');
         }
 
         // Reset CURLOPT_FILE with STDOUT to avoid: "curl_exec(): CURLOPT_FILE
@@ -1276,5 +1284,14 @@ final class Curl
         $this->cookies[\implode('', $name_chars)] = \implode('', $value_chars);
 
         return $this;
+    }
+
+    private function getCurlHandle(): \CurlHandle
+    {
+        if ($this->curl === false) {
+            throw new \LogicException('cURL handle is not initialized.');
+        }
+
+        return $this->curl;
     }
 }

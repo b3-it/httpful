@@ -17,7 +17,7 @@ class Uri implements UriInterface
     const HTTP_DEFAULT_HOST = 'localhost';
 
     /**
-     * @var array
+     * @var array<string, int>
      */
     private static $defaultPorts = [
         'http'   => 80,
@@ -44,7 +44,7 @@ class Uri implements UriInterface
     private static $charSubDelims = '!\$&\'\(\)\*\+,;=';
 
     /**
-     * @var array
+     * @var array<string, string>
      */
     private static $replaceQuery = [
         '=' => '%3D',
@@ -89,14 +89,13 @@ class Uri implements UriInterface
     /**
      * @param string $uri URI to parse
      */
-    public function __construct($uri = '')
+    public function __construct(string $uri = '')
     {
-        // weak type check to also accept null until we can add scalar type hints
         if ($uri !== '') {
             $parts = \parse_url($uri);
 
             if ($parts === false) {
-                throw new \InvalidArgumentException("Unable to parse URI: ${uri}");
+                throw new \InvalidArgumentException("Unable to parse URI: {$uri}");
             }
 
             $this->_applyParts($parts);
@@ -106,7 +105,7 @@ class Uri implements UriInterface
     /**
      * @return string
      */
-    public function __toString()
+    public function __toString(): string
     {
         return self::composeComponents(
             $this->scheme,
@@ -165,7 +164,7 @@ class Uri implements UriInterface
     /**
      * @return int|null
      */
-    public function getPort()
+    public function getPort(): ?int
     {
         return $this->port;
     }
@@ -199,7 +198,7 @@ class Uri implements UriInterface
      *
      * @return $this|Uri|UriInterface
      */
-    public function withFragment($fragment)
+    public function withFragment($fragment): UriInterface
     {
         $fragment = $this->_filterQueryAndFragment($fragment);
 
@@ -214,11 +213,11 @@ class Uri implements UriInterface
     }
 
     /**
-     * @param string $host
+     * @param mixed $host
      *
      * @return $this|Uri|UriInterface
      */
-    public function withHost($host)
+    public function withHost($host): UriInterface
     {
         $host = $this->_filterHost($host);
 
@@ -234,11 +233,11 @@ class Uri implements UriInterface
     }
 
     /**
-     * @param string $path
+     * @param mixed $path
      *
      * @return $this|Uri|UriInterface
      */
-    public function withPath($path)
+    public function withPath($path): UriInterface
     {
         $path = $this->_filterPath($path);
 
@@ -258,7 +257,7 @@ class Uri implements UriInterface
      *
      * @return $this|Uri|UriInterface
      */
-    public function withPort($port)
+    public function withPort($port): UriInterface
     {
         $port = $this->_filterPort($port);
 
@@ -279,7 +278,7 @@ class Uri implements UriInterface
      *
      * @return $this|Uri|UriInterface
      */
-    public function withQuery($query)
+    public function withQuery($query): UriInterface
     {
         $query = $this->_filterQueryAndFragment($query);
 
@@ -298,7 +297,7 @@ class Uri implements UriInterface
      *
      * @return $this|Uri|UriInterface
      */
-    public function withScheme($scheme)
+    public function withScheme($scheme): UriInterface
     {
         $scheme = $this->_filterScheme($scheme);
 
@@ -320,7 +319,7 @@ class Uri implements UriInterface
      *
      * @return $this|Uri|UriInterface
      */
-    public function withUserInfo($user, $password = null)
+    public function withUserInfo($user, $password = null): UriInterface
     {
         $info = $this->_filterUserInfoComponent($user);
         if ($password !== null) {
@@ -394,7 +393,7 @@ class Uri implements UriInterface
     /**
      * Creates a URI from a hash of `parse_url` components.
      *
-     * @param array $parts
+     * @param array<string, mixed> $parts
      *
      * @throws \InvalidArgumentException if the components do not form a valid URI
      *
@@ -528,7 +527,7 @@ class Uri implements UriInterface
      *
      * @see https://tools.ietf.org/html/rfc3986#section-4.4
      */
-    public static function isSameDocumentReference(UriInterface $uri, UriInterface $base = null): bool
+    public static function isSameDocumentReference(UriInterface $uri, ?UriInterface $base = null): bool
     {
         if ($base !== null) {
             $uri = UriResolver::resolve($base, $uri);
@@ -576,7 +575,7 @@ class Uri implements UriInterface
      * It has the same behavior as withQueryValue() but for an associative array of key => value.
      *
      * @param UriInterface $uri           URI to use as a base
-     * @param array        $keyValueArray Associative array of key and values
+     * @param array<string, string|null> $keyValueArray Associative array of key and values
      *
      * @return UriInterface
      */
@@ -649,7 +648,7 @@ class Uri implements UriInterface
     }
 
     /**
-     * @param string $host
+     * @param mixed $host
      *
      * @throws \InvalidArgumentException if the host is invalid
      *
@@ -667,7 +666,7 @@ class Uri implements UriInterface
     /**
      * Filters the path of a URI
      *
-     * @param string $path
+     * @param mixed $path
      *
      * @throws \InvalidArgumentException if the path is invalid
      *
@@ -712,7 +711,7 @@ class Uri implements UriInterface
     /**
      * Filters the query string or fragment of a URI.
      *
-     * @param string $str
+     * @param mixed $str
      *
      * @throws \InvalidArgumentException if the query or fragment is invalid
      *
@@ -732,7 +731,7 @@ class Uri implements UriInterface
     }
 
     /**
-     * @param string $scheme
+     * @param mixed $scheme
      *
      * @throws \InvalidArgumentException if the scheme is invalid
      *
@@ -748,7 +747,7 @@ class Uri implements UriInterface
     }
 
     /**
-     * @param string $component
+     * @param mixed $component
      *
      * @throws \InvalidArgumentException if the user info is invalid
      *
@@ -791,7 +790,7 @@ class Uri implements UriInterface
      * @param UriInterface $uri
      * @param string[]     $keys
      *
-     * @return array
+     * @return array<int, string>
      */
     private static function _getFilteredQueryString(UriInterface $uri, array $keys): array
     {

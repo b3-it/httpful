@@ -9,10 +9,14 @@ namespace Httpful;
 
 use Httpful\Exception\ResponseHeaderException;
 
+/**
+ * @implements \ArrayAccess<string, array<int, string>>
+ * @implements \Iterator<string, array<int, string>>
+ */
 class Headers implements \ArrayAccess, \Countable, \Iterator
 {
     /**
-     * @var mixed[] data storage with lowercase keys
+     * @var array<string, array<int, string>> data storage with lowercase keys
      *
      * @see offsetSet()
      * @see offsetExists()
@@ -26,7 +30,7 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
     private $data = [];
 
     /**
-     * @var string[] case-sensitive keys
+     * @var array<string, string> case-sensitive keys
      *
      * @see offsetSet()
      * @see offsetUnset()
@@ -39,9 +43,9 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      * Case-Insensitive Array.  (Caution: Data may be lost when converting Case-
      * Sensitive Arrays to Case-Insensitive Arrays)
      *
-     * @param mixed[] $initial (optional) Existing Array to convert
+     * @param array<string, array<int, float|int|string>|float|int|string>|null $initial (optional) Existing Array to convert
      */
-    public function __construct(array $initial = null)
+    public function __construct(?array $initial = null)
     {
         if ($initial !== null) {
             foreach ($initial as $key => $value) {
@@ -59,6 +63,7 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @return int the number of elements stored in the array
      */
+    #[\ReturnTypeWillChange]
     public function count()
     {
         return (int) \count($this->data);
@@ -67,8 +72,9 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
     /**
      * @see https://secure.php.net/manual/en/iterator.current.php
      *
-     * @return mixed data at the current position
+     * @return array<int, string>|false data at the current position
      */
+    #[\ReturnTypeWillChange]
     public function current()
     {
         return \current($this->data);
@@ -77,11 +83,16 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
     /**
      * @see https://secure.php.net/manual/en/iterator.key.php
      *
-     * @return mixed case-sensitive key at current position
+     * @return string|null case-sensitive key at current position
      */
+    #[\ReturnTypeWillChange]
     public function key()
     {
         $key = \key($this->data);
+
+        if ($key === null) {
+            return null;
+        }
 
         return $this->keys[$key] ?? $key;
     }
@@ -91,6 +102,7 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @return void
      */
+    #[\ReturnTypeWillChange]
     public function next()
     {
         \next($this->data);
@@ -101,6 +113,7 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @return void
      */
+    #[\ReturnTypeWillChange]
     public function rewind()
     {
         \reset($this->data);
@@ -111,14 +124,15 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @return bool if the current position is valid
      */
+    #[\ReturnTypeWillChange]
     public function valid()
     {
         return \key($this->data) !== null;
     }
 
     /**
-     * @param string $offset the offset to store the data at (case-insensitive)
-     * @param mixed  $value  the data to store at the specified offset
+     * @param string                                 $offset the offset to store the data at (case-insensitive)
+     * @param array<int, float|int|string>|float|int|string $value  the data to store at the specified offset
      *
      * @return void
      */
@@ -186,6 +200,7 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @return bool if the offset exists
      */
+    #[\ReturnTypeWillChange]
     public function offsetExists($offset)
     {
         return (bool) \array_key_exists(\strtolower($offset), $this->data);
@@ -199,8 +214,9 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @param string $offset offset to lookup
      *
-     * @return mixed the data stored at the offset
+     * @return array<int, string>|null the data stored at the offset
      */
+    #[\ReturnTypeWillChange]
     public function offsetGet($offset)
     {
         $offsetLower = \strtolower($offset);
@@ -209,13 +225,14 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
     }
 
     /**
-     * @param string $offset
-     * @param string $value
+     * @param string             $offset
+     * @param array<int, string> $value
      *
      * @throws ResponseHeaderException
      *
      * @return void
      */
+    #[\ReturnTypeWillChange]
     public function offsetSet($offset, $value)
     {
         throw new ResponseHeaderException('Headers are read-only.');
@@ -228,13 +245,14 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @return void
      */
+    #[\ReturnTypeWillChange]
     public function offsetUnset($offset)
     {
         throw new ResponseHeaderException('Headers are read-only.');
     }
 
     /**
-     * @return array
+     * @return array<string, array<int, string>>
      */
     public function toArray(): array
     {
@@ -244,10 +262,8 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
         $that = clone $this;
 
         foreach ($that as $key => $value) {
-            if (\is_array($value)) {
-                foreach ($value as $keyInner => $valueInner) {
-                    $value[$keyInner] = \trim($valueInner, " \t");
-                }
+            foreach ($value as $keyInner => $valueInner) {
+                $value[$keyInner] = \trim($valueInner, " \t");
             }
 
             $return[$key] = $value;
@@ -330,20 +346,16 @@ class Headers implements \ArrayAccess, \Countable, \Iterator
      *
      * @see https://secure.php.net/manual/en/arrayaccess.offsetset.php
      *
-     * @param string|null $offset the offset to store the data at (case-insensitive)
-     * @param mixed       $value  the data to store at the specified offset
+     * @param string $offset the offset to store the data at (case-insensitive)
+     * @param array<int, string> $value  the data to store at the specified offset
      *
      * @return void
      */
     private function offsetSetForce($offset, $value)
     {
-        if ($offset === null) {
-            $this->data[] = $value;
-        } else {
-            $offsetlower = \strtolower($offset);
-            $this->data[$offsetlower] = $value;
-            $this->keys[$offsetlower] = $offset;
-        }
+        $offsetlower = \strtolower($offset);
+        $this->data[$offsetlower] = $value;
+        $this->keys[$offsetlower] = $offset;
     }
 
     /**

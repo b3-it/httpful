@@ -14,13 +14,17 @@ use PHPUnit\Framework\TestCase;
  */
 final class ClientPromiseTest extends TestCase
 {
+    private static function localFixtureUrl(string $path): string
+    {
+        return 'http://' . \TEST_SERVER . '/' . ltrim($path, '/');
+    }
+
     public function testGet()
     {
         $client = new ClientPromise();
 
         $request = (new Request('GET'))
-            ->withUriFromString('http://moelleken.org')
-            ->followRedirects();
+            ->withUriFromString(self::localFixtureUrl('foo.txt'));
 
         $promise = $client->sendAsyncRequest($request);
 
@@ -35,9 +39,9 @@ final class ClientPromiseTest extends TestCase
         static::assertInstanceOf(Response::class, $result);
 
         if (\method_exists(__CLASS__, 'assertStringContainsString')) {
-            static::assertStringContainsString('Lars Moelleken', (string) $result);
+            static::assertStringContainsString('Foobar', (string) $result);
         } else {
-            static::assertContains('Lars Moelleken', (string) $result);
+            static::assertContains('Foobar', (string) $result);
         }
     }
 
@@ -45,8 +49,8 @@ final class ClientPromiseTest extends TestCase
     {
         $client = new ClientPromise();
 
-        $client->add_get('http://google.com?a=b');
-        $client->add_get('http://moelleken.org');
+        $client->add_get(self::localFixtureUrl('foo.txt'));
+        $client->add_get(self::localFixtureUrl('test.json'));
 
         $promise = $client->getPromise();
 
@@ -59,13 +63,33 @@ final class ClientPromiseTest extends TestCase
         $promise->wait();
 
         static::assertCount(2, $results);
+        $bodies = array_map('strval', $results);
+        sort($bodies);
 
         if (\method_exists(__CLASS__, 'assertStringContainsString')) {
-            static::assertStringContainsString('<!doctype html>', (string) $results[0]);
-            static::assertStringContainsString('Lars Moelleken', (string) $results[1]);
+            static::assertStringContainsString('Foobar', $bodies[0] . $bodies[1]);
+            static::assertStringContainsString('"foo": "bar"', $bodies[0] . $bodies[1]);
         } else {
-            static::assertContains('<!doctype html>', (string) $results[0]);
-            static::assertContains('Lars Moelleken', (string) $results[1]);
+            static::assertContains('Foobar', $bodies[0] . $bodies[1]);
+            static::assertContains('"foo": "bar"', $bodies[0] . $bodies[1]);
         }
+    }
+
+    public function testRequestSendAsyncHelper()
+    {
+        $request = Request::get(self::localFixtureUrl('foo.txt'));
+
+        $promise = $request->sendAsync();
+
+        /** @var Response $result */
+        $result = null;
+        $promise->then(static function (Response $response, Request $request) use (&$result) {
+            $result = $response;
+        });
+
+        $promise->wait();
+
+        static::assertInstanceOf(Response::class, $result);
+        static::assertStringContainsString('Foobar', (string) $result);
     }
 }

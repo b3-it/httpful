@@ -1,5 +1,51 @@
 # Changelog
 
+## unreleased
+
+- add the `QUERY` HTTP method ([RFC 10008](https://www.rfc-editor.org/rfc/rfc10008.html)): `Http::QUERY`, `Request::query()`, `Client::query()` / `Client::query_request()` and `ClientMulti::add_query()`. `QUERY` carries the query in the request body like `POST`, but is classified as safe and idempotent, so it is reported by `Http::safeMethods()` and `Http::idempotentMethods()`.
+
+## 3.2.0 (2026-05-05)
+
+- breaking change: require PHP 8.0+
+- add async requests via `Request::sendAsync()`
+- add request helpers for bearer auth, basic auth, retries, TLS trust, cookies, Alt-Svc / HSTS caches, proxy routing, and HTTP/2 + HTTP/3 selection
+- add curl-style aliases such as `authenticateWithBearerToken()`, `authenticateWithBasicAuth()`, `downloadTo()`, and `useHttp*()`
+- add response transfer-info helpers for the effective URL, IPs, timings, redirect count, and negotiated HTTP version
+- fix direct stream body handling when `Response` is created from an existing stream
+- fix `withNtlmAuth()`
+- fix `retry_max_time`
+
+## 3.1.0 (2026-04-24)
+
+- test with PHP 8.3 + 8.4 + 8.5
+- update dependencies
+- increase test coverage
+- added debug method into response : `debugInfo()`
+
+## 3.0.1 (2023-07-22)
+
+- "composer.json" -> provide "psr/http-factory-implementation"
+
+## 3.0.0 (2023-07-20)
+
+- minimal PHP version 7.4
+- allow to use "psr/http-message" 2.0.* 
+- allow to use "psr/log" 2.0.* || 3.0.*
+
+breaking change:
+- "Response->hasBody()" was fixed, now it will return `false` for an empty body
+- "Request->getUri()" now always returns an `UriInterface` , if we need the old behaviors, use can use "Request->getUriOrNull()"
+- "Stream->getContents()" now always returns a `string`, if we need the old behaviors, use can use "Stream->getContentsUnserialized()"
+- "psr/http-message" v2 has return types, so you need to use them too, if you extend one of this classes
+
+## 2.4.9 (2023-07-15)
+
+- use "ReturnTypeWillChange" to ignore return type changes from PHP >= 8.1
+
+## 2.4.8 (2023-07-14)
+
+- update dependencies "httplug / http-message"
+
 ## 2.4.7 (2021-12-08)
 
 - update "portable-utf8"
@@ -10,7 +56,7 @@
 
 ## 2.4.5 (2021-09-14)
 
-- "XmlMimeHandler" -> show the borken xml
+- "XmlMimeHandler" -> show the broken xml
 
 ## 2.4.4 (2021-09-09)
 
@@ -274,4 +320,3 @@
  - Created AbstractMimeHandler type that all Mime Handlers must extend
  - Pulled out the parsing/serializing logic from the Request/Response classes into their own MimeHandler classes
  - Added ability to register new mime handlers for mime types
-

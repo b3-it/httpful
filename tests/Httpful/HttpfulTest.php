@@ -355,6 +355,22 @@ Transfer-Encoding: chunked\r\n";
         static::assertSame(Mime::PLAIN, $r->getContentType());
     }
 
+    public function testFromTemplate()
+    {
+        $template = (new Request())
+            ->withMethod(Http::GET)
+            ->enableStrictSSL()
+            ->withExpectedType(Mime::PLAIN)
+            ->withContentType(Mime::PLAIN);
+
+        $r = Request::fromTemplate($template);
+
+        static::assertTrue($r->isStrictSSL());
+        static::assertSame(Http::GET, $r->getHttpMethod());
+        static::assertSame(Mime::PLAIN, $r->getExpectedType());
+        static::assertSame(Mime::PLAIN, $r->getContentType());
+    }
+
     /**
      * init
      */
@@ -370,6 +386,14 @@ Transfer-Encoding: chunked\r\n";
         $req = (new Request())->withContentType(Mime::UPLOAD);
 
         static::assertTrue($req->isUpload());
+        static::assertSame(Request::SERIALIZE_PAYLOAD_NEVER, $req->getSerializePayloadMethod());
+    }
+
+    public function testUploadMimeTypeDisablesPayloadSerialization()
+    {
+        $req = (new Request())->withMimeType(Mime::UPLOAD);
+
+        static::assertSame(Request::SERIALIZE_PAYLOAD_NEVER, $req->getSerializePayloadMethod());
     }
 
     public function testJsonResponseParse()
@@ -694,7 +718,6 @@ Content-Type: text/plain; charset=utf-8\r\n",
             static::assertContains('User-Agent: ACME/1.2.3', $r->getRawHeaders());
             static::assertNotContains('User-Agent: HttpFul/1.0', $r->getRawHeaders());
         }
-
 
         $r = Request::get('http://example.com/')
             ->withUserAgent('');

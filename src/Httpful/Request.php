@@ -9,12 +9,17 @@ use Httpful\Curl\MultiCurl;
 use Httpful\Exception\ClientErrorException;
 use Httpful\Exception\NetworkErrorException;
 use Httpful\Exception\RequestException;
+use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\StreamInterface;
 use Psr\Http\Message\UriInterface;
 use Psr\Log\LoggerInterface;
 use voku\helper\UTF8;
 
+/**
+ * @implements \IteratorAggregate<string, mixed>
+ * @phpstan-consistent-constructor
+ */
 class Request implements \IteratorAggregate, RequestInterface
 {
     const MAX_REDIRECTS_DEFAULT = 25;
@@ -33,7 +38,7 @@ class Request implements \IteratorAggregate, RequestInterface
     private $template;
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $helperData = [];
 
@@ -135,7 +140,7 @@ class Request implements \IteratorAggregate, RequestInterface
     private $expected_type = '';
 
     /**
-     * @var array
+     * @var array<int, mixed>
      */
     private $additional_curl_opts = [];
 
@@ -170,7 +175,7 @@ class Request implements \IteratorAggregate, RequestInterface
     private $payload = [];
 
     /**
-     * @var array
+     * @var array<string|int, mixed>
      */
     private $params = [];
 
@@ -200,23 +205,19 @@ class Request implements \IteratorAggregate, RequestInterface
     private $max_redirects = self::MAX_REDIRECTS_DEFAULT;
 
     /**
-     * @var array
+     * @var array<string, callable>
      */
     private $payload_serializers = [];
 
     /**
      * Curl Object
-     *
-     * @var Curl|null
      */
-    private $curl;
+    private ?Curl $curl = null;
 
     /**
      * MultiCurl Object
-     *
-     * @var MultiCurl|null
      */
-    private $curlMulti;
+    private ?MultiCurl $curlMulti = null;
 
     /**
      * @var bool
@@ -229,9 +230,39 @@ class Request implements \IteratorAggregate, RequestInterface
     private $protocol_version = Http::HTTP_1_1;
 
     /**
+     * @var int|string|null
+     */
+    private $curl_http_version;
+
+    /**
      * @var bool
      */
     private $retry_by_possible_encoding_error = false;
+
+    /**
+     * @var int
+     */
+    private $retry = 0;
+
+    /**
+     * @var float|int|null
+     */
+    private $retry_delay;
+
+    /**
+     * @var float|int|null
+     */
+    private $retry_max_time;
+
+    /**
+     * @var bool
+     */
+    private $retry_all_errors = false;
+
+    /**
+     * @var bool
+     */
+    private $retry_connection_refused = false;
 
     /**
      * @var callable|string|null
@@ -241,14 +272,14 @@ class Request implements \IteratorAggregate, RequestInterface
     /**
      * The Client::get, Client::post, ... syntax is preferred as it is more readable.
      *
-     * @param string|null $method   Http Method
-     * @param string|null $mime     Mime Type to Use
-     * @param static|null $template "Request"-template object
+     * @param string|null  $method   Http Method
+     * @param string|null  $mime     Mime Type to Use
+     * @param Request|null $template "Request"-template object
      */
     public function __construct(
-        string $method = null,
-        string $mime = null,
-        self $template = null
+        ?string $method = null,
+        ?string $mime = null,
+        ?self $template = null
     ) {
         $this->initialize();
 
@@ -287,7 +318,10 @@ class Request implements \IteratorAggregate, RequestInterface
 
         // init
         $this->initialize();
-        \assert($this->curl instanceof Curl);
+        $curl = $this->curl;
+        if ($curl === null) {
+            throw new NetworkErrorException('Unable to initialize cURL.');
+        }
 
         if ($this->params === []) {
             $this->_uriPrep();
@@ -319,30 +353,28 @@ class Request implements \IteratorAggregate, RequestInterface
             }
         }
 
-        \assert($this->curl instanceof Curl);
+        $curl->setUrl((string) $this->uri);
 
-        $this->curl->setUrl((string) $this->uri);
-
-        $ch = $this->curl->getCurl();
+        $ch = $curl->getCurl();
         if ($ch === false) {
             throw new NetworkErrorException('Unable to connect to "' . $this->uri . '". => "curl_init" === false');
         }
 
-        $this->curl->setOpt(\CURLOPT_IPRESOLVE, \CURL_IPRESOLVE_WHATEVER);
+        $curl->setOpt(\CURLOPT_IPRESOLVE, \CURL_IPRESOLVE_WHATEVER);
 
         if ($this->method === Http::POST) {
             // Use CURLOPT_POST to have browser-like POST-to-GET redirects for 301, 302 and 303
-            $this->curl->setOpt(\CURLOPT_POST, true);
+            $curl->setOpt(\CURLOPT_POST, true);
         } else {
-            $this->curl->setOpt(\CURLOPT_CUSTOMREQUEST, $this->method);
+            $curl->setOpt(\CURLOPT_CUSTOMREQUEST, $this->method);
         }
 
         if ($this->method === Http::HEAD) {
-            $this->curl->setOpt(\CURLOPT_NOBODY, true);
+            $curl->setOpt(\CURLOPT_NOBODY, true);
         }
 
         if ($this->hasBasicAuth()) {
-            $this->curl->setOpt(\CURLOPT_USERPWD, $this->username . ':' . $this->password);
+            $curl->setOpt(\CURLOPT_USERPWD, $this->username . ':' . $this->password);
         }
 
         if ($this->hasClientSideCert()) {
@@ -354,58 +386,58 @@ class Request implements \IteratorAggregate, RequestInterface
                 throw new RequestException($this, 'Could not read Client Certificate');
             }
 
-            $this->curl->setOpt(\CURLOPT_SSLCERTTYPE, $this->ssl_key_type);
-            $this->curl->setOpt(\CURLOPT_SSLKEYTYPE, $this->ssl_key_type);
-            $this->curl->setOpt(\CURLOPT_SSLCERT, $this->ssl_cert);
-            $this->curl->setOpt(\CURLOPT_SSLKEY, $this->ssl_key);
+            $curl->setOpt(\CURLOPT_SSLCERTTYPE, $this->ssl_key_type);
+            $curl->setOpt(\CURLOPT_SSLKEYTYPE, $this->ssl_key_type);
+            $curl->setOpt(\CURLOPT_SSLCERT, $this->ssl_cert);
+            $curl->setOpt(\CURLOPT_SSLKEY, $this->ssl_key);
             if ($this->ssl_passphrase !== null) {
-                $this->curl->setOpt(\CURLOPT_SSLKEYPASSWD, $this->ssl_passphrase);
+                $curl->setOpt(\CURLOPT_SSLKEYPASSWD, $this->ssl_passphrase);
             }
         }
 
-        $this->curl->setOpt(\CURLOPT_TCP_NODELAY, true);
+        $curl->setOpt(\CURLOPT_TCP_NODELAY, true);
 
         if ($this->hasTimeout()) {
-            $this->curl->setOpt(\CURLOPT_TIMEOUT_MS, \round($this->timeout * 1000));
+            $curl->setOpt(\CURLOPT_TIMEOUT_MS, \round($this->timeout * 1000));
         }
 
         if ($this->hasConnectionTimeout()) {
-            $this->curl->setOpt(\CURLOPT_CONNECTTIMEOUT_MS, \round($this->connection_timeout * 1000));
+            $curl->setOpt(\CURLOPT_CONNECTTIMEOUT_MS, \round($this->connection_timeout * 1000));
 
             if (\DIRECTORY_SEPARATOR !== '\\' && $this->connection_timeout < 1) {
-                $this->curl->setOpt(\CURLOPT_NOSIGNAL, true);
+                $curl->setOpt(\CURLOPT_NOSIGNAL, true);
             }
         }
 
         if ($this->follow_redirects === true) {
-            $this->curl->setOpt(\CURLOPT_FOLLOWLOCATION, true);
-            $this->curl->setOpt(\CURLOPT_MAXREDIRS, $this->max_redirects);
+            $curl->setOpt(\CURLOPT_FOLLOWLOCATION, true);
+            $curl->setOpt(\CURLOPT_MAXREDIRS, $this->max_redirects);
         }
 
-        $this->curl->setOpt(\CURLOPT_SSL_VERIFYPEER, $this->strict_ssl);
+        $curl->setOpt(\CURLOPT_SSL_VERIFYPEER, $this->strict_ssl);
         // zero is safe for all curl versions
         $verifyValue = $this->strict_ssl + 0;
         // support for value 1 removed in cURL 7.28.1 value 2 valid in all versions
         if ($verifyValue > 0) {
             ++$verifyValue;
         }
-        $this->curl->setOpt(\CURLOPT_SSL_VERIFYHOST, $verifyValue);
+        $curl->setOpt(\CURLOPT_SSL_VERIFYHOST, $verifyValue);
 
-        $this->curl->setOpt(\CURLOPT_RETURNTRANSFER, true);
+        $curl->setOpt(\CURLOPT_RETURNTRANSFER, true);
 
-        $this->curl->setOpt(\CURLOPT_ENCODING, $this->content_encoding);
+        $curl->setOpt(\CURLOPT_ENCODING, $this->content_encoding);
 
         if ($this->port !== null) {
-            $this->curl->setOpt(\CURLOPT_PORT, $this->port);
+            $curl->setOpt(\CURLOPT_PORT, $this->port);
         }
 
-        $this->curl->setOpt(\CURLOPT_PROTOCOLS, \CURLPROTO_HTTP | \CURLPROTO_HTTPS);
+        $curl->setOpt(\CURLOPT_PROTOCOLS, \CURLPROTO_HTTP | \CURLPROTO_HTTPS);
 
-        $this->curl->setOpt(\CURLOPT_REDIR_PROTOCOLS, \CURLPROTO_HTTP | \CURLPROTO_HTTPS);
+        $curl->setOpt(\CURLOPT_REDIR_PROTOCOLS, \CURLPROTO_HTTP | \CURLPROTO_HTTPS);
 
         // set Content-Length to the size of the payload if present
         if ($this->serialized_payload) {
-            $this->curl->setOpt(\CURLOPT_POSTFIELDS, $this->serialized_payload);
+            $curl->setOpt(\CURLOPT_POSTFIELDS, $this->serialized_payload);
 
             if (!$this->isUpload()) {
                 $this->headers->forceSet('Content-Length', $this->_determineLength($this->serialized_payload));
@@ -425,12 +457,8 @@ class Request implements \IteratorAggregate, RequestInterface
         }
 
         foreach ($this->headers as $header => $value) {
-            if (\is_array($value)) {
-                foreach ($value as $valueInner) {
-                    $headers[] = "${header}: ${valueInner}";
-                }
-            } else {
-                $headers[] = "${header}: ${value}";
+            foreach ($value as $valueInner) {
+                $headers[] = "{$header}: {$valueInner}";
             }
         }
 
@@ -475,7 +503,7 @@ class Request implements \IteratorAggregate, RequestInterface
         }
 
         $path = ($url['path'] ?? '/') . (isset($url['query']) ? '?' . $url['query'] : '');
-        $this->raw_headers = "{$this->method} ${path} HTTP/{$this->protocol_version}\r\n";
+        $this->raw_headers = "{$this->method} {$path} HTTP/{$this->protocol_version}\r\n";
         $this->raw_headers .= \implode("\r\n", $headers);
         $this->raw_headers .= "\r\n";
 
@@ -494,40 +522,24 @@ class Request implements \IteratorAggregate, RequestInterface
                 $header = \substr_replace($header, ';', -2);
             }
         }
-        $this->curl->setOpt(\CURLOPT_HTTPHEADER, $headers);
+        $curl->setOpt(\CURLOPT_HTTPHEADER, $headers);
 
         if ($this->debug) {
-            $this->curl->setOpt(\CURLOPT_VERBOSE, true);
+            $curl->setOpt(\CURLOPT_VERBOSE, true);
         }
 
         // If there are some additional curl opts that the user wants to set, we can tack them in here.
         foreach ($this->additional_curl_opts as $curlOpt => $curlVal) {
-            $this->curl->setOpt($curlOpt, $curlVal);
+            $curl->setOpt($curlOpt, $curlVal);
         }
 
-        switch ($this->protocol_version) {
-            case Http::HTTP_1_0:
-                $this->curl->setOpt(\CURLOPT_HTTP_VERSION, \CURL_HTTP_VERSION_1_0);
-
-                break;
-            case Http::HTTP_1_1:
-                $this->curl->setOpt(\CURLOPT_HTTP_VERSION, \CURL_HTTP_VERSION_1_1);
-
-                break;
-            case Http::HTTP_2_0:
-                $this->curl->setOpt(\CURLOPT_HTTP_VERSION, \CURL_HTTP_VERSION_2_0);
-
-                break;
-            default:
-                $this->curl->setOpt(\CURLOPT_HTTP_VERSION, \CURL_HTTP_VERSION_NONE);
-
-                break;
-        }
+        $this->_configureRetryBehavior();
+        $curl->setOpt(\CURLOPT_HTTP_VERSION, $this->_resolveCurlHttpVersion());
 
         if ($this->file_path_for_download) {
-            $this->curl->download($this->file_path_for_download);
-            $this->curl->setOpt(\CURLOPT_CUSTOMREQUEST, 'GET');
-            $this->curl->setOpt(\CURLOPT_HTTPGET, true);
+            $curl->download($this->file_path_for_download);
+            $curl->setOpt(\CURLOPT_CUSTOMREQUEST, 'GET');
+            $curl->setOpt(\CURLOPT_HTTPGET, true);
             $this->disableAutoParsing();
         }
 
@@ -678,6 +690,21 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
+     * @param string      $cert
+     * @param string      $key
+     * @param string|null $passphrase
+     * @param string      $ssl_key_type
+     *
+     * @return static
+     *
+     * @see Request::clientSideCertAuth()
+     */
+    public function withClientSideCertificateAuth($cert, $key, $passphrase = null, $ssl_key_type = 'PEM'): self
+    {
+        return $this->clientSideCertAuth($cert, $key, $passphrase, $ssl_key_type);
+    }
+
+    /**
      * @see Request::initialize()
      *
      * @return void
@@ -707,23 +734,27 @@ class Request implements \IteratorAggregate, RequestInterface
             $uri = (string) $uri;
         }
 
-        return (new self(Http::GET))
-            ->withUriFromString($uri)
-            ->withDownload($file_path)
-            ->withCacheControl('no-cache')
-            ->withContentEncoding(Encoding::NONE);
+        /** @var static $request */
+        $request = new static(Http::GET);
+        $request = $request->withUriFromString($uri);
+        $request = $request->withDownload($file_path);
+        $request = $request->withCacheControl('no-cache');
+        $request = $request->withContentEncoding(Encoding::NONE);
+
+        /** @var static $request */
+        return $request;
     }
 
     /**
      * HTTP Method Delete
      *
      * @param string|UriInterface $uri
-     * @param array|null          $params
+     * @param array<string|int, mixed>|null $params
      * @param string|null         $mime
      *
      * @return static
      */
-    public static function delete($uri, array $params = null, string $mime = null): self
+    public static function delete($uri, ?array $params = null, ?string $mime = null): self
     {
         if ($uri instanceof UriInterface) {
             $uri = (string) $uri;
@@ -742,9 +773,11 @@ class Request implements \IteratorAggregate, RequestInterface
             }
         }
 
-        return (new self(Http::DELETE))
-            ->withUriFromString($uri . $paramsString)
-            ->withMimeType($mime);
+        /** @var static $request */
+        $request = new static(Http::DELETE);
+        $request = $request->withUriFromString($uri . $paramsString);
+
+        return $request->withMimeType($mime);
     }
 
     /**
@@ -953,19 +986,24 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function followRedirects(bool $follow = true): self
+    public function followRedirects(bool|int $follow = true): self
     {
         $new = clone $this;
 
+        if ($follow === false) {
+            $new->max_redirects = 0;
+            $new->follow_redirects = false;
+
+            return $new;
+        }
+
         if ($follow === true) {
             $new->max_redirects = static::MAX_REDIRECTS_DEFAULT;
-        } elseif ($follow === false) {
-            $new->max_redirects = 0;
         } else {
             $new->max_redirects = \max(0, $follow);
         }
 
-        $new->follow_redirects = $follow;
+        $new->follow_redirects = true;
 
         return $new;
     }
@@ -974,12 +1012,12 @@ class Request implements \IteratorAggregate, RequestInterface
      * HTTP Method Get
      *
      * @param string|UriInterface $uri
-     * @param array|null          $params
+     * @param array<string|int, mixed>|null $params
      * @param string              $mime
      *
      * @return static
      */
-    public static function get($uri, array $params = null, string $mime = null): self
+    public static function get($uri, ?array $params = null, ?string $mime = null): self
     {
         if ($uri instanceof UriInterface) {
             $uri = (string) $uri;
@@ -998,9 +1036,11 @@ class Request implements \IteratorAggregate, RequestInterface
             }
         }
 
-        return (new self(Http::GET))
-            ->withUriFromString($uri . $paramsString)
-            ->withMimeType($mime);
+        /** @var static $request */
+        $request = new static(Http::GET);
+        $request = $request->withUriFromString($uri . $paramsString);
+
+        return $request->withMimeType($mime);
     }
 
     /**
@@ -1031,10 +1071,11 @@ class Request implements \IteratorAggregate, RequestInterface
     public function getHeader($name): array
     {
         if ($this->headers->offsetExists($name)) {
+            /** @var mixed $value */
             $value = $this->headers->offsetGet($name);
 
             if (!\is_array($value)) {
-                return [\trim($value, " \t")];
+                return [\trim((string) $value, " \t")];
             }
 
             foreach ($value as $keyInner => $valueInner) {
@@ -1073,7 +1114,7 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
-     * @return array
+     * @return array<string, string[]>
      */
     public function getHeaders(): array
     {
@@ -1138,10 +1179,22 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
-     * @return Uri|UriInterface|null
+     * @return null|Uri|UriInterface
      */
-    public function getUri()
+    public function getUriOrNull(): ?UriInterface
     {
+        return $this->uri;
+    }
+
+    /**
+     * @return Uri|UriInterface
+     */
+    public function getUri(): UriInterface
+    {
+        if ($this->uri === null) {
+            throw new RequestException($this, 'URI is not set.');
+        }
+
         return $this->uri;
     }
 
@@ -1177,9 +1230,11 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withAddedHeader($name, $value)
+    public function withAddedHeader($name, $value): MessageInterface
     {
-        if (!\is_string($name) || $name === '') {
+        /** @var mixed $headerName */
+        $headerName = $name;
+        if (!\is_string($headerName) || $headerName === '') {
             throw new \InvalidArgumentException('Header name must be an RFC 7230 compatible string.');
         }
 
@@ -1189,10 +1244,15 @@ class Request implements \IteratorAggregate, RequestInterface
             $value = [$value];
         }
 
-        if ($new->headers->offsetExists($name)) {
-            $new->headers->forceSet($name, \array_merge_recursive($new->headers->offsetGet($name), $value));
+        if ($new->headers->offsetExists($headerName)) {
+            /** @var mixed $currentValues */
+            $currentValues = $new->headers->offsetGet($headerName);
+            if (!\is_array($currentValues)) {
+                $currentValues = [$currentValues];
+            }
+            $new->headers->forceSet($headerName, \array_merge_recursive($currentValues, $value));
         } else {
-            $new->headers->forceSet($name, $value);
+            $new->headers->forceSet($headerName, $value);
         }
 
         return $new;
@@ -1213,13 +1273,11 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withBody(StreamInterface $body)
+    public function withBody(StreamInterface $body): MessageInterface
     {
         $stream = Http::stream($body);
 
-        $new = clone $this;
-
-        return $new->_setBody($stream, null);
+        return (clone $this)->_setBody($stream, null);
     }
 
     /**
@@ -1270,7 +1328,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withMethod($method)
+    public function withMethod($method): RequestInterface
     {
         $new = clone $this;
 
@@ -1294,13 +1352,95 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withProtocolVersion($version)
+    public function withProtocolVersion($version): MessageInterface
     {
         $new = clone $this;
 
         $new->protocol_version = $version;
+        $new->curl_http_version = null;
+
+        switch ((string) $version) {
+            case Http::HTTP_1_0:
+                $new->curl_http_version = \CURL_HTTP_VERSION_1_0;
+
+                break;
+            case Http::HTTP_1_1:
+                $new->curl_http_version = \CURL_HTTP_VERSION_1_1;
+
+                break;
+            case Http::HTTP_2_0:
+                $new->curl_http_version = \CURL_HTTP_VERSION_2_0;
+
+                break;
+            case Http::HTTP_3:
+                $new->curl_http_version = 'CURL_HTTP_VERSION_3';
+
+                break;
+        }
 
         return $new;
+    }
+
+    /**
+     * @return static
+     */
+    public function withHttp2Tls(): self
+    {
+        return $this->_withCurlHttpVersion(Http::HTTP_2_0, 'CURL_HTTP_VERSION_2TLS');
+    }
+
+    /**
+     * @return static
+     */
+    public function withHttp2PriorKnowledge(): self
+    {
+        return $this->_withCurlHttpVersion(Http::HTTP_2_0, 'CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE');
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withHttp2PriorKnowledge()
+     */
+    public function useHttp2PriorKnowledge(): self
+    {
+        return $this->withHttp2PriorKnowledge();
+    }
+
+    /**
+     * @return static
+     */
+    public function withHttp3(): self
+    {
+        return $this->_withCurlHttpVersion(Http::HTTP_3, 'CURL_HTTP_VERSION_3');
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withHttp3()
+     */
+    public function useHttp3(): self
+    {
+        return $this->withHttp3();
+    }
+
+    /**
+     * @return static
+     */
+    public function withHttp3Only(): self
+    {
+        return $this->_withCurlHttpVersion(Http::HTTP_3, 'CURL_HTTP_VERSION_3ONLY');
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withHttp3Only()
+     */
+    public function useHttp3Only(): self
+    {
+        return $this->withHttp3Only();
     }
 
     /**
@@ -1322,7 +1462,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withRequestTarget($requestTarget)
+    public function withRequestTarget($requestTarget): RequestInterface
     {
         if (\preg_match('#\\s#', $requestTarget)) {
             throw new \InvalidArgumentException('Invalid request target provided; cannot contain whitespace');
@@ -1369,11 +1509,9 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withUri(UriInterface $uri, $preserveHost = false)
+    public function withUri(UriInterface $uri, $preserveHost = false): RequestInterface
     {
-        $new = clone $this;
-
-        return $new->_withUri($uri, $preserveHost);
+        return (clone $this)->_withUri($uri, $preserveHost);
     }
 
     /**
@@ -1431,7 +1569,7 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
-     * @return \ArrayObject
+     * @return \ArrayObject<string, mixed>
      */
     public function getIterator(): \ArrayObject
     {
@@ -1454,7 +1592,7 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
-     * @return array
+     * @return array<int|string, \CURLFile|string>
      */
     public function getPayload(): array
     {
@@ -1512,7 +1650,7 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
-     * @return bool has the internal curl (non multi) request been initialized?
+     * @return bool has the internal curl (non-multi) request been initialized?
      */
     public function hasBeenInitialized(): bool
     {
@@ -1520,7 +1658,7 @@ class Request implements \IteratorAggregate, RequestInterface
             return false;
         }
 
-        return \is_resource($this->curl->getCurl());
+        return $this->curl->getCurl() !== false;
     }
 
     /**
@@ -1532,7 +1670,7 @@ class Request implements \IteratorAggregate, RequestInterface
             return false;
         }
 
-        return \is_resource($this->curlMulti->getMultiCurl());
+        return $this->curlMulti->getMultiCurl() !== null;
     }
 
     /**
@@ -1570,9 +1708,7 @@ class Request implements \IteratorAggregate, RequestInterface
      */
     public function hasParseCallback(): bool
     {
-        return isset($this->parse_callback)
-               &&
-               \is_callable($this->parse_callback);
+        return $this->parse_callback !== null;
     }
 
     /**
@@ -1586,12 +1722,9 @@ class Request implements \IteratorAggregate, RequestInterface
          *  but also by environment variable called http_proxy.
          */
         return (
-                   isset($this->additional_curl_opts[\CURLOPT_PROXY])
-                   &&
-                   \is_string($this->additional_curl_opts[\CURLOPT_PROXY])
-               )
-               ||
-               \getenv('http_proxy');
+            isset($this->additional_curl_opts[\CURLOPT_PROXY])
+            && \is_string($this->additional_curl_opts[\CURLOPT_PROXY])
+        ) || \getenv('http_proxy');
     }
 
     /**
@@ -1615,9 +1748,11 @@ class Request implements \IteratorAggregate, RequestInterface
             $uri = (string) $uri;
         }
 
-        return (new self(Http::HEAD))
-            ->withUriFromString($uri)
-            ->withMimeType(Mime::PLAIN);
+        /** @var static $request */
+        $request = new static(Http::HEAD);
+        $request = $request->withUriFromString($uri);
+
+        return $request->withMimeType(Mime::PLAIN);
     }
 
     /**
@@ -1687,6 +1822,16 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
+     * @return static
+     *
+     * @see Request::serializePayloadMode()
+     */
+    public function alwaysSerializePayload(): self
+    {
+        return $this->serializePayloadMode(static::SERIALIZE_PAYLOAD_ALWAYS);
+    }
+
+    /**
      * HTTP Method Options
      *
      * @param string|UriInterface $uri
@@ -1699,7 +1844,10 @@ class Request implements \IteratorAggregate, RequestInterface
             $uri = (string) $uri;
         }
 
-        return (new self(Http::OPTIONS))->withUriFromString($uri);
+        /** @var static $request */
+        $request = new static(Http::OPTIONS);
+
+        return $request->withUriFromString($uri);
     }
 
     /**
@@ -1711,15 +1859,44 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public static function patch($uri, $payload = null, string $mime = null): self
+    public static function patch($uri, $payload = null, ?string $mime = null): self
     {
         if ($uri instanceof UriInterface) {
             $uri = (string) $uri;
         }
 
-        return (new self(Http::PATCH))
-            ->withUriFromString($uri)
-            ->_setBody($payload, null, $mime);
+        /** @var static $request */
+        $request = new static(Http::PATCH);
+        $request = $request->withUriFromString($uri);
+
+        return $request->_setBody($payload, null, $mime);
+    }
+
+    /**
+     * HTTP Method Query (RFC 10008)
+     *
+     * QUERY carries the query itself in the request body, but is safe and
+     * idempotent. RFC 10008 requires the server to reject the request when the
+     * Content-Type is missing or inconsistent with the content, so callers
+     * should pass the MIME type that describes $payload.
+     *
+     * @param string|UriInterface $uri
+     * @param mixed               $payload data to send in body of request
+     * @param string              $mime    MIME to use for Content-Type
+     *
+     * @return static
+     */
+    public static function query($uri, $payload = null, ?string $mime = null): self
+    {
+        if ($uri instanceof UriInterface) {
+            $uri = (string) $uri;
+        }
+
+        /** @var static $request */
+        $request = new static(Http::QUERY);
+        $request = $request->withUriFromString($uri);
+
+        return $request->_setBody($payload, null, $mime);
     }
 
     /**
@@ -1731,15 +1908,17 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public static function post($uri, $payload = null, string $mime = null): self
+    public static function post($uri, $payload = null, ?string $mime = null): self
     {
         if ($uri instanceof UriInterface) {
             $uri = (string) $uri;
         }
 
-        return (new self(Http::POST))
-            ->withUriFromString($uri)
-            ->_setBody($payload, null, $mime);
+        /** @var static $request */
+        $request = new static(Http::POST);
+        $request = $request->withUriFromString($uri);
+
+        return $request->_setBody($payload, null, $mime);
     }
 
     /**
@@ -1751,15 +1930,17 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public static function put($uri, $payload = null, string $mime = null): self
+    public static function put($uri, $payload = null, ?string $mime = null): self
     {
         if ($uri instanceof UriInterface) {
             $uri = (string) $uri;
         }
 
-        return (new self(Http::PUT))
-            ->withUriFromString($uri)
-            ->_setBody($payload, null, $mime);
+        /** @var static $request */
+        $request = new static(Http::PUT);
+        $request = $request->withUriFromString($uri);
+
+        return $request->_setBody($payload, null, $mime);
     }
 
     /**
@@ -1901,9 +2082,12 @@ class Request implements \IteratorAggregate, RequestInterface
     public function send(): Response
     {
         $this->_curlPrep();
-        \assert($this->curl instanceof Curl);
+        $curl = $this->curl;
+        if ($curl === null) {
+            throw new NetworkErrorException('Unable to initialize cURL.');
+        }
 
-        $result = $this->curl->exec();
+        $result = $curl->exec();
 
         if (
             $result === false
@@ -1912,23 +2096,16 @@ class Request implements \IteratorAggregate, RequestInterface
         ) {
             // Possibly a gzip issue makes curl unhappy.
             if (
-                $this->curl->errorCode === \CURLE_WRITE_ERROR
-                ||
-                $this->curl->errorCode === \CURLE_BAD_CONTENT_ENCODING
+                \in_array($this->curl->errorCode, [\CURLE_WRITE_ERROR, \CURLE_BAD_CONTENT_ENCODING], true)
             ) {
-
                 // Docs say 'identity,' but 'none' seems to work (sometimes?).
                 $this->curl->setOpt(\CURLOPT_ENCODING, 'none');
 
                 $result = $this->curl->exec();
 
                 if ($result === false) {
-                    /** @noinspection NotOptimalIfConditionsInspection */
                     if (
-                        /* @phpstan-ignore-next-line | FP? */
-                        $this->curl->errorCode === \CURLE_WRITE_ERROR
-                        ||
-                        $this->curl->errorCode === \CURLE_BAD_CONTENT_ENCODING
+                        \in_array($this->curl->errorCode, [\CURLE_WRITE_ERROR, \CURLE_BAD_CONTENT_ENCODING], true)
                     ) {
                         $this->curl->setOpt(\CURLOPT_ENCODING, 'identity');
 
@@ -2098,6 +2275,149 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
+     * @param int|string $maximum_number_of_retries
+     *
+     * @return static
+     */
+    public function withRetry($maximum_number_of_retries): self
+    {
+        if (!\preg_match('/^\d+$/', (string) $maximum_number_of_retries)) {
+            throw new \InvalidArgumentException(
+                'Invalid retry count provided: ' . \var_export($maximum_number_of_retries, true)
+            );
+        }
+
+        $new = clone $this;
+        $new->retry = (int) $maximum_number_of_retries;
+
+        return $new;
+    }
+
+    /**
+     * @param int|string $maximum_number_of_retries
+     *
+     * @return static
+     *
+     * @see Request::withRetry()
+     */
+    public function retry($maximum_number_of_retries): self
+    {
+        return $this->withRetry($maximum_number_of_retries);
+    }
+
+    /**
+     * @param float|int $delay seconds between retry attempts
+     *
+     * @return static
+     */
+    public function withRetryDelay($delay): self
+    {
+        $new = clone $this;
+        $new->retry_delay = $this->_normalizeDurationValue($delay, 'retry delay');
+
+        return $new;
+    }
+
+    /**
+     * @param float|int $delay
+     *
+     * @return static
+     *
+     * @see Request::withRetryDelay()
+     */
+    public function retryAfter($delay): self
+    {
+        return $this->withRetryDelay($delay);
+    }
+
+    /**
+     * @param float|int $max_time overall retry budget in seconds
+     *
+     * @return static
+     */
+    public function withRetryMaxTime($max_time): self
+    {
+        $new = clone $this;
+        $new->retry_max_time = $this->_normalizeDurationValue($max_time, 'retry max time');
+
+        return $new;
+    }
+
+    /**
+     * @param float|int $max_time
+     *
+     * @return static
+     *
+     * @see Request::withRetryMaxTime()
+     */
+    public function retryForAtMost($max_time): self
+    {
+        return $this->withRetryMaxTime($max_time);
+    }
+
+    /**
+     * @return static
+     */
+    public function withRetryAllErrors(bool $retry_all_errors = true): self
+    {
+        $new = clone $this;
+        $new->retry_all_errors = $retry_all_errors;
+
+        return $new;
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withRetryAllErrors()
+     */
+    public function retryOnAllErrors(): self
+    {
+        return $this->withRetryAllErrors(true);
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withRetryAllErrors()
+     */
+    public function doNotRetryOnAllErrors(): self
+    {
+        return $this->withRetryAllErrors(false);
+    }
+
+    /**
+     * @return static
+     */
+    public function withRetryConnectionRefused(bool $retry_connection_refused = true): self
+    {
+        $new = clone $this;
+        $new->retry_connection_refused = $retry_connection_refused;
+
+        return $new;
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withRetryConnectionRefused()
+     */
+    public function retryOnConnectionRefused(): self
+    {
+        return $this->withRetryConnectionRefused(true);
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withRetryConnectionRefused()
+     */
+    public function doNotRetryOnConnectionRefused(): self
+    {
+        return $this->withRetryConnectionRefused(false);
+    }
+
+    /**
      * Shortcut for useProxy to configure SOCKS 4 proxy
      *
      * @param string   $proxy_host    Hostname or address of the proxy
@@ -2166,7 +2486,7 @@ class Request implements \IteratorAggregate, RequestInterface
      */
     public function withAddedCookie(string $name, string $value): self
     {
-        return $this->withAddedHeader('Cookie', "${name}=${value}");
+        return $this->withAddedHeader('Cookie', "{$name}={$value}");
     }
 
     /**
@@ -2181,7 +2501,7 @@ class Request implements \IteratorAggregate, RequestInterface
         $fInfo = \finfo_open(\FILEINFO_MIME_TYPE);
         if ($fInfo === false) {
             /** @noinspection ForgottenDebugOutputInspection */
-            \error_log('finfo_open() did not work', \E_USER_WARNING);
+            \error_log('finfo_open() did not work');
 
             return $new;
         }
@@ -2221,7 +2541,42 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
-     * @param array $body
+     * @param string $username
+     * @param string $password
+     *
+     * @return static
+     *
+     * @see Request::withBasicAuth()
+     */
+    public function authenticateWithBasicAuth($username, $password): self
+    {
+        return $this->withBasicAuth($username, $password);
+    }
+
+    /**
+     * @param string $token
+     *
+     * @return static
+     */
+    public function withBearerToken(string $token): self
+    {
+        return $this->withHeader('Authorization', 'Bearer ' . $token);
+    }
+
+    /**
+     * @param string $token
+     *
+     * @return static
+     *
+     * @see Request::withBearerToken()
+     */
+    public function authenticateWithBearerToken(string $token): self
+    {
+        return $this->withBearerToken($token);
+    }
+
+    /**
+     * @param array<string|int, mixed> $body
      *
      * @return static
      */
@@ -2264,6 +2619,115 @@ class Request implements \IteratorAggregate, RequestInterface
         $new->connection_timeout = $connection_timeout;
 
         return $new;
+    }
+
+    /**
+     * @param string $ca_bundle_path
+     *
+     * @return static
+     */
+    public function withCaBundle(string $ca_bundle_path): self
+    {
+        return $this->_withNamedCurlOption('CURLOPT_CAINFO', $ca_bundle_path);
+    }
+
+    /**
+     * @param string $ca_bundle_path
+     *
+     * @return static
+     *
+     * @see Request::withCaBundle()
+     */
+    public function useCaBundle(string $ca_bundle_path): self
+    {
+        return $this->withCaBundle($ca_bundle_path);
+    }
+
+    /**
+     * @param string $ca_path
+     *
+     * @return static
+     */
+    public function withCaPath(string $ca_path): self
+    {
+        return $this->_withNamedCurlOption('CURLOPT_CAPATH', $ca_path);
+    }
+
+    /**
+     * @param string $ca_path
+     *
+     * @return static
+     *
+     * @see Request::withCaPath()
+     */
+    public function useCaPath(string $ca_path): self
+    {
+        return $this->withCaPath($ca_path);
+    }
+
+    /**
+     * @param int|string $minimum_version
+     * @param int|string $maximum_version
+     *
+     * @return static
+     */
+    public function withTlsVersion($minimum_version, $maximum_version = null): self
+    {
+        [$minimum_option, $minimum_rank] = $this->_normalizeTlsVersionOption($minimum_version, false);
+        $ssl_version = $minimum_option;
+
+        if ($maximum_version !== null) {
+            [$maximum_option, $maximum_rank] = $this->_normalizeTlsVersionOption($maximum_version, true);
+
+            if (
+                $minimum_rank !== null
+                &&
+                $maximum_rank !== null
+                &&
+                $minimum_rank > $maximum_rank
+            ) {
+                throw new \InvalidArgumentException('The minimum TLS version cannot be greater than the maximum TLS version.');
+            }
+
+            $ssl_version |= $maximum_option;
+        }
+
+        return $this->_withNamedCurlOption('CURLOPT_SSLVERSION', $ssl_version);
+    }
+
+    /**
+     * @param int|string $minimum_version
+     * @param int|string $maximum_version
+     *
+     * @return static
+     *
+     * @see Request::withTlsVersion()
+     */
+    public function useTlsVersion($minimum_version, $maximum_version = null): self
+    {
+        return $this->withTlsVersion($minimum_version, $maximum_version);
+    }
+
+    /**
+     * @param string $pinned_public_key
+     *
+     * @return static
+     */
+    public function withPinnedPublicKey(string $pinned_public_key): self
+    {
+        return $this->_withNamedCurlOption('CURLOPT_PINNEDPUBLICKEY', $pinned_public_key);
+    }
+
+    /**
+     * @param string $pinned_public_key
+     *
+     * @return static
+     *
+     * @see Request::withPinnedPublicKey()
+     */
+    public function pinPublicKey(string $pinned_public_key): self
+    {
+        return $this->withPinnedPublicKey($pinned_public_key);
     }
 
     /**
@@ -2342,11 +2806,9 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withContentType($mime, string $fallback = null): self
+    public function withContentType($mime, ?string $fallback = null): self
     {
-        $new = clone $this;
-
-        return $new->_withContentType($mime, $fallback);
+        return (clone $this)->_withContentType($mime, $fallback);
     }
 
     /**
@@ -2431,7 +2893,51 @@ class Request implements \IteratorAggregate, RequestInterface
      */
     public function withCookie(string $name, string $value): self
     {
-        return $this->withHeader('Cookie', "${name}=${value}");
+        return $this->withHeader('Cookie', "{$name}={$value}");
+    }
+
+    /**
+     * @param string $cookie_file
+     *
+     * @return static
+     */
+    public function withCookieFile(string $cookie_file): self
+    {
+        return $this->_withNamedCurlOption('CURLOPT_COOKIEFILE', $cookie_file);
+    }
+
+    /**
+     * @param string $cookie_file
+     *
+     * @return static
+     *
+     * @see Request::withCookieFile()
+     */
+    public function useCookieFile(string $cookie_file): self
+    {
+        return $this->withCookieFile($cookie_file);
+    }
+
+    /**
+     * @param string $cookie_jar
+     *
+     * @return static
+     */
+    public function withCookieJar(string $cookie_jar): self
+    {
+        return $this->_withNamedCurlOption('CURLOPT_COOKIEJAR', $cookie_jar);
+    }
+
+    /**
+     * @param string $cookie_jar
+     *
+     * @return static
+     *
+     * @see Request::withCookieJar()
+     */
+    public function useCookieJar(string $cookie_jar): self
+    {
+        return $this->withCookieJar($cookie_jar);
     }
 
     /**
@@ -2447,9 +2953,61 @@ class Request implements \IteratorAggregate, RequestInterface
     {
         $new = clone $this;
 
-        $new->additional_curl_opts[$curl_opt] = $curl_opt_val;
+        $new->_withCurlOptionValue($curl_opt, $curl_opt_val);
 
         return $new;
+    }
+
+    /**
+     * @param string $filename
+     *
+     * @return static
+     */
+    public function withAltSvcCache(string $filename = '', bool $read_only = false): self
+    {
+        $new = $this->_withNamedCurlOption('CURLOPT_ALTSVC', $filename);
+
+        return $new->_withNamedCurlOption(
+            'CURLOPT_ALTSVC_CTRL',
+            $this->_buildAltSvcControlValue($read_only)
+        );
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withAltSvcCache()
+     */
+    public function useAltSvcCache(string $filename = '', bool $read_only = false): self
+    {
+        return $this->withAltSvcCache($filename, $read_only);
+    }
+
+    /**
+     * @param string|null $filename
+     *
+     * @return static
+     */
+    public function withHstsCache($filename = null, bool $read_only = false): self
+    {
+        $new = $this->_withNamedCurlOption('CURLOPT_HSTS', $filename);
+
+        return $new->_withNamedCurlOption(
+            'CURLOPT_HSTS_CTRL',
+            $this->_buildHstsControlValue($read_only)
+        );
+    }
+
+    /**
+     * @param string|null $filename
+     *
+     * @return static
+     *
+     * @see Request::withHstsCache()
+     */
+    public function useHstsCache($filename = null, bool $read_only = false): self
+    {
+        return $this->withHstsCache($filename, $read_only);
     }
 
     /**
@@ -2492,11 +3050,9 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    public function withExpectedType($mime, string $fallback = null): self
+    public function withExpectedType($mime, ?string $fallback = null): self
     {
-        $new = clone $this;
-
-        return $new->_withExpectedType($mime, $fallback);
+        return (clone $this)->_withExpectedType($mime, $fallback);
     }
 
     /**
@@ -2525,9 +3081,7 @@ class Request implements \IteratorAggregate, RequestInterface
      */
     public function withMimeType($mime): self
     {
-        $new = clone $this;
-
-        return $new->_withMimeType($mime);
+        return (clone $this)->_withMimeType($mime);
     }
 
     /**
@@ -2540,7 +3094,7 @@ class Request implements \IteratorAggregate, RequestInterface
     {
         $new = clone $this;
 
-        $new->withCurlOption(\CURLOPT_HTTPAUTH, \CURLAUTH_NTLM);
+        $new = $new->withCurlOption(\CURLOPT_HTTPAUTH, \CURLAUTH_NTLM);
 
         return $new->withBasicAuth($username, $password);
     }
@@ -2573,7 +3127,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * Takes an associative array of key/value pairs as an argument.
      *
-     * @param array $params
+     * @param array<string|int, mixed> $params
      *
      * @return static this
      */
@@ -2612,7 +3166,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *                                Default null, no authentication
      * @param string   $auth_username Authentication username. Default null
      * @param string   $auth_password Authentication password. Default null
-     * @param int      $proxy_type    Proxy-Tye for Curl. Default is "Proxy::HTTP"
+     * @param int      $proxy_type    Proxy-Type for Curl. Default is "Proxy::HTTP"
      *
      * @return static
      */
@@ -2635,6 +3189,110 @@ class Request implements \IteratorAggregate, RequestInterface
         }
 
         return $new;
+    }
+
+    /**
+     * @return static
+     */
+    public function withProxyTunnel(bool $tunnel = true): self
+    {
+        return $this->_withNamedCurlOption('CURLOPT_HTTPPROXYTUNNEL', $tunnel);
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withProxyTunnel()
+     */
+    public function useProxyTunnel(): self
+    {
+        return $this->withProxyTunnel(true);
+    }
+
+    /**
+     * @return static
+     *
+     * @see Request::withProxyTunnel()
+     */
+    public function doNotUseProxyTunnel(): self
+    {
+        return $this->withProxyTunnel(false);
+    }
+
+    /**
+     * @param string[]|string $hosts
+     *
+     * @return static
+     */
+    public function withNoProxy($hosts): self
+    {
+        if (\is_array($hosts)) {
+            $hosts = \implode(',', $hosts);
+        }
+
+        return $this->_withNamedCurlOption('CURLOPT_NOPROXY', (string) $hosts);
+    }
+
+    /**
+     * @param string[]|string $hosts
+     *
+     * @return static
+     *
+     * @see Request::withNoProxy()
+     */
+    public function noProxy($hosts): self
+    {
+        return $this->withNoProxy($hosts);
+    }
+
+    /**
+     * @param string[]|string $entries
+     *
+     * @return static
+     */
+    public function withResolve($entries): self
+    {
+        return $this->_withNamedCurlOption(
+            'CURLOPT_RESOLVE',
+            $this->_normalizeCurlStringList($entries, 'resolve entries')
+        );
+    }
+
+    /**
+     * @param string[]|string $entries
+     *
+     * @return static
+     *
+     * @see Request::withResolve()
+     */
+    public function resolve($entries): self
+    {
+        return $this->withResolve($entries);
+    }
+
+    /**
+     * @param string[]|string $entries
+     *
+     * @return static
+     */
+    public function withConnectTo($entries): self
+    {
+        return $this->_withNamedCurlOption(
+            'CURLOPT_CONNECT_TO',
+            $this->_normalizeCurlStringList($entries, 'connect-to entries')
+        );
+    }
+
+    /**
+     * @param string[]|string $entries
+     *
+     * @return static
+     *
+     * @see Request::withConnectTo()
+     */
+    public function connectTo($entries): self
+    {
+        return $this->withConnectTo($entries);
     }
 
     /**
@@ -2714,6 +3372,39 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
+     * @param string $file_path
+     *
+     * @return static
+     *
+     * @see Request::withDownload()
+     */
+    public function downloadTo($file_path): self
+    {
+        /** @var static $request */
+        $request = $this->withDownload($file_path);
+
+        return $request;
+    }
+
+    /**
+     * @return \Http\Promise\Promise
+     */
+    public function sendAsync()
+    {
+        return (new ClientPromise())->sendAsyncRequest($this);
+    }
+
+    /**
+     * @param Request $template
+     *
+     * @return static
+     */
+    public static function fromTemplate(self $template): self
+    {
+        return new static(null, null, $template);
+    }
+
+    /**
      * @param string $uri
      * @param bool   $useClone
      *
@@ -2722,9 +3413,7 @@ class Request implements \IteratorAggregate, RequestInterface
     public function withUriFromString(string $uri, bool $useClone = true): self
     {
         if ($useClone) {
-            $new = clone $this;
-
-            return $new->withUri(new Uri($uri));
+            return (clone $this)->withUri(new Uri($uri));
         }
 
         return $this->_withUri(new Uri($uri));
@@ -2754,7 +3443,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @internal
      */
-    public function _buildResponse($result, Curl $curl = null): Response
+    public function _buildResponse($result, ?Curl $curl = null): Response
     {
         // fallback
         if ($curl === null) {
@@ -2831,6 +3520,304 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
+     * @return void
+     */
+    private function _configureRetryBehavior(): void
+    {
+        $curl = $this->curl;
+        if ($curl === null) {
+            throw new \LogicException('cURL is not initialized.');
+        }
+
+        $curl->attempts = 0;
+        $curl->retries = 0;
+
+        if ($this->retry <= 0) {
+            $curl->setRetry(0);
+
+            return;
+        }
+
+        $curl->setRetry($this->_createRetryDecider());
+    }
+
+    /**
+     * @return callable
+     */
+    private function _createRetryDecider(): callable
+    {
+        $maximum_number_of_retries = $this->retry;
+        $retry_delay = $this->retry_delay;
+        $retry_max_time = $this->retry_max_time;
+        $retry_all_errors = $this->retry_all_errors;
+        $retry_connection_refused = $this->retry_connection_refused;
+        $started_at = null;
+        $retry_attempts = 0;
+
+        return static function (Curl $curl) use (
+            $maximum_number_of_retries,
+            $retry_delay,
+            $retry_max_time,
+            $retry_all_errors,
+            $retry_connection_refused,
+            &$started_at,
+            &$retry_attempts
+        ): bool {
+            if ($retry_attempts >= $maximum_number_of_retries) {
+                return false;
+            }
+
+            if (
+                !$retry_all_errors
+                &&
+                !self::_isRetryableError($curl, $retry_connection_refused)
+            ) {
+                return false;
+            }
+
+            $delay_in_seconds = $retry_delay;
+            if ($delay_in_seconds === null) {
+                $delay_in_seconds = \min(600.0, (float) (2 ** $retry_attempts));
+            }
+
+            if ($started_at === null) {
+                $started_at = \microtime(true);
+            }
+
+            if (
+                $retry_max_time !== null
+                &&
+                ((\microtime(true) - $started_at) + $delay_in_seconds) > $retry_max_time
+            ) {
+                return false;
+            }
+
+            if ($delay_in_seconds > 0) {
+                \usleep((int) \round($delay_in_seconds * 1000000));
+            }
+
+            ++$retry_attempts;
+
+            return true;
+        };
+    }
+
+    /**
+     * @return bool
+     */
+    private static function _isRetryableError(Curl $curl, bool $retry_connection_refused): bool
+    {
+        if ($curl->isCurlError()) {
+            if ($curl->getCurlErrorCode() === \CURLE_OPERATION_TIMEOUTED) {
+                return true;
+            }
+
+            if (
+                $retry_connection_refused
+                &&
+                $curl->getCurlErrorCode() === \CURLE_COULDNT_CONNECT
+                &&
+                \stripos((string) $curl->getCurlErrorMessage(), 'Connection refused') !== false
+            ) {
+                return true;
+            }
+
+            return false;
+        }
+
+        return \in_array(
+            $curl->getHttpStatusCode(),
+            [408, 429, 500, 502, 503, 504],
+            true
+        );
+    }
+
+    /**
+     * @return int
+     */
+    private static function _requireCurlConstant(string $constant_name): int
+    {
+        if (!\defined($constant_name)) {
+            throw new \RuntimeException('The installed cURL extension does not support ' . $constant_name . '.');
+        }
+
+        return (int) \constant($constant_name);
+    }
+
+    /**
+     * @return static
+     */
+    private function _withCurlHttpVersion(string $protocol_version, string $curl_http_version_constant_name): self
+    {
+        $new = clone $this;
+        $new->protocol_version = $protocol_version;
+        $new->curl_http_version = $curl_http_version_constant_name;
+
+        return $new;
+    }
+
+    /**
+     * @return int
+     */
+    private function _resolveCurlHttpVersion(): int
+    {
+        if (\is_int($this->curl_http_version)) {
+            return $this->curl_http_version;
+        }
+
+        if (\is_string($this->curl_http_version) && $this->curl_http_version !== '') {
+            return self::_requireCurlConstant($this->curl_http_version);
+        }
+
+        switch ((string) $this->protocol_version) {
+            case Http::HTTP_1_0:
+                return \CURL_HTTP_VERSION_1_0;
+            case Http::HTTP_1_1:
+                return \CURL_HTTP_VERSION_1_1;
+            case Http::HTTP_2_0:
+                return \CURL_HTTP_VERSION_2_0;
+            case Http::HTTP_3:
+                return self::_requireCurlConstant('CURL_HTTP_VERSION_3');
+            default:
+                return \CURL_HTTP_VERSION_NONE;
+        }
+    }
+
+    /**
+     * @param mixed $value
+     *
+     * @return static
+     */
+    private function _withNamedCurlOption(string $curl_option_constant_name, $value): self
+    {
+        $new = clone $this;
+        $new->_withCurlOptionValue(self::_requireCurlConstant($curl_option_constant_name), $value);
+
+        return $new;
+    }
+
+    /**
+     * @param mixed $curl_opt_val
+     *
+     * @return static
+     */
+    private function _withCurlOptionValue(int $curl_opt, $curl_opt_val): self
+    {
+        $this->additional_curl_opts[$curl_opt] = $curl_opt_val;
+
+        return $this;
+    }
+
+    /**
+     * @param array<int, mixed>|string $entries
+     *
+     * @return string[]
+     */
+    private function _normalizeCurlStringList($entries, string $description): array
+    {
+        if (!\is_array($entries)) {
+            $entries = [$entries];
+        }
+
+        $normalized_entries = [];
+        foreach ($entries as $entry) {
+            if (!\is_string($entry) || $entry === '') {
+                throw new \InvalidArgumentException('Invalid ' . $description . ' provided: ' . \var_export($entry, true));
+            }
+
+            $normalized_entries[] = $entry;
+        }
+
+        return $normalized_entries;
+    }
+
+    /**
+     * @param string|int $version
+     *
+     * @return array{0:int,1:int|null}
+     */
+    private function _normalizeTlsVersionOption($version, bool $maximum): array
+    {
+        if (\is_int($version)) {
+            return [$version, null];
+        }
+
+        $normalized_version = \str_replace(['tls', 'v'], '', \strtolower(\trim((string) $version)));
+
+        if ($normalized_version === 'default') {
+            return [self::_requireCurlConstant('CURL_SSLVERSION_DEFAULT'), 0];
+        }
+
+        $map = [
+            '1'   => ['CURL_SSLVERSION_TLSv1', 1],
+            '1.0' => [$maximum ? 'CURL_SSLVERSION_MAX_TLSv1_0' : 'CURL_SSLVERSION_TLSv1_0', 1],
+            '1.1' => [$maximum ? 'CURL_SSLVERSION_MAX_TLSv1_1' : 'CURL_SSLVERSION_TLSv1_1', 2],
+            '1.2' => [$maximum ? 'CURL_SSLVERSION_MAX_TLSv1_2' : 'CURL_SSLVERSION_TLSv1_2', 3],
+            '1.3' => [$maximum ? 'CURL_SSLVERSION_MAX_TLSv1_3' : 'CURL_SSLVERSION_TLSv1_3', 4],
+        ];
+
+        if (!isset($map[$normalized_version])) {
+            throw new \InvalidArgumentException('Invalid TLS version provided: ' . \var_export($version, true));
+        }
+
+        return [self::_requireCurlConstant($map[$normalized_version][0]), $map[$normalized_version][1]];
+    }
+
+    /**
+     * @return int
+     */
+    private function _buildAltSvcControlValue(bool $read_only): int
+    {
+        $control = 0;
+
+        foreach (['CURLALTSVC_H1', 'CURLALTSVC_H2', 'CURLALTSVC_H3'] as $constant_name) {
+            if (\defined($constant_name)) {
+                $control |= (int) \constant($constant_name);
+            }
+        }
+
+        if ($control === 0) {
+            throw new \RuntimeException('The installed cURL extension does not support Alt-Svc control flags.');
+        }
+
+        if ($read_only) {
+            $control |= self::_requireCurlConstant('CURLALTSVC_READONLYFILE');
+        }
+
+        return $control;
+    }
+
+    /**
+     * @return int
+     */
+    private function _buildHstsControlValue(bool $read_only): int
+    {
+        $control = self::_requireCurlConstant('CURLHSTS_ENABLE');
+
+        if ($read_only) {
+            $control |= self::_requireCurlConstant('CURLHSTS_READONLYFILE');
+        }
+
+        return $control;
+    }
+
+    /**
+     * @param float|int $value
+     *
+     * @return float|int
+     */
+    private function _normalizeDurationValue($value, string $description)
+    {
+        if (!\preg_match('/^\d+(\.\d+)?$/', (string) $value)) {
+            throw new \InvalidArgumentException(
+                'Invalid ' . $description . ' provided: ' . \var_export($value, true)
+            );
+        }
+
+        return $value + 0;
+    }
+
+    /**
      * @param bool $auto_parse perform automatic "smart"
      *                         parsing based on Content-Type or "expectedType"
      *                         If not auto parsing, Response->body returns the body
@@ -2848,17 +3835,17 @@ class Request implements \IteratorAggregate, RequestInterface
     }
 
     /**
-     * @param string|null $str payload
+     * @param mixed $str payload
      *
      * @return int length of payload in bytes
      */
     private function _determineLength($str): int
     {
-        if ($str === null) {
+        if ($str === null || \is_array($str)) {
             return 0;
         }
 
-        return \strlen($str);
+        return \strlen((string) $str);
     }
 
     /**
@@ -2907,7 +3894,7 @@ class Request implements \IteratorAggregate, RequestInterface
      * Added in support for custom payload serializers.
      * The serialize_payload_method stuff still holds true though.
      *
-     * @param array|string $payload
+     * @param array<int|string, mixed>|string $payload
      *
      * @return mixed
      *
@@ -2967,7 +3954,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    private function _setBody($payload, $key = null, string $mimeType = null): self
+    private function _setBody($payload, $key = null, ?string $mimeType = null): self
     {
         $this->_withMimeType($mimeType);
 
@@ -3109,7 +4096,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    private function _withContentType($mime, string $fallback = null): self
+    private function _withContentType($mime, ?string $fallback = null): self
     {
         if (empty($mime) && empty($fallback)) {
             return $this;
@@ -3119,14 +4106,10 @@ class Request implements \IteratorAggregate, RequestInterface
             $mime = $fallback;
         }
 
-        if (empty($mime)) {
-            return $this;
-        }
-
         $this->content_type = Mime::getFullMime($mime);
 
         if ($this->isUpload()) {
-            $this->neverSerializePayload();
+            $this->serialize_payload_method = static::SERIALIZE_PAYLOAD_NEVER;
         }
 
         return $this;
@@ -3138,7 +4121,7 @@ class Request implements \IteratorAggregate, RequestInterface
      *
      * @return static
      */
-    private function _withExpectedType($mime, string $fallback = null): self
+    private function _withExpectedType($mime, ?string $fallback = null): self
     {
         if (empty($mime) && empty($fallback)) {
             return $this;
@@ -3146,10 +4129,6 @@ class Request implements \IteratorAggregate, RequestInterface
 
         if (empty($mime)) {
             $mime = $fallback;
-        }
-
-        if (empty($mime)) {
-            return $this;
         }
 
         $this->expected_type = Mime::getFullMime($mime);
@@ -3174,7 +4153,7 @@ class Request implements \IteratorAggregate, RequestInterface
         $this->content_type = $this->expected_type;
 
         if ($this->isUpload()) {
-            $this->neverSerializePayload();
+            $this->serialize_payload_method = static::SERIALIZE_PAYLOAD_NEVER;
         }
 
         return $this;

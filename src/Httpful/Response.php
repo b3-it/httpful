@@ -65,7 +65,7 @@ class Response implements ResponseInterface
     private $charset = '';
 
     /**
-     * @var array
+     * @var array<string, mixed>
      */
     private $meta_data;
 
@@ -80,22 +80,24 @@ class Response implements ResponseInterface
     private $is_mime_personal = false;
 
     /**
-     * @param StreamInterface|string|null $body
-     * @param array|string|null           $headers
-     * @param RequestInterface|null       $request
-     * @param array                       $meta_data
+     * @param StreamInterface|string|null                 $body
+     * @param array<string, string|string[]>|string|null $headers
+     * @param RequestInterface|null                       $request
+     * @param array<string, mixed>                       $meta_data
      *                                               <p>e.g. [protocol_version] = '1.1'</p>
      */
     public function __construct(
         $body = null,
         $headers = null,
-        RequestInterface $request = null,
+        ?RequestInterface $request = null,
         array $meta_data = []
     ) {
-        if (!($body instanceof Stream)) {
+        $bodyWasStream = $body instanceof StreamInterface;
+        if (!$bodyWasStream) {
             $this->raw_body = $body;
-            $body = Stream::create($body);
         }
+
+        $body = Stream::createNotNull($body);
 
         $this->request = $request;
         $this->raw_headers = $headers;
@@ -129,7 +131,15 @@ class Response implements ResponseInterface
 
         $this->_interpretHeaders();
 
-        $bodyParsed = $this->_parse($body);
+        $preserveOriginalBodyStream = $bodyWasStream
+            && $this->request === null
+            && (
+                $this->raw_headers === null
+                || $this->raw_headers === ''
+                || $this->raw_headers === []
+            );
+
+        $bodyParsed = $preserveOriginalBodyStream ? $body : $this->_parse($body);
         $this->body = Stream::createNotNull($bodyParsed);
         $this->raw_body = $bodyParsed;
     }
@@ -229,10 +239,11 @@ class Response implements ResponseInterface
     public function getHeader($name): array
     {
         if ($this->headers->offsetExists($name)) {
+            /** @var mixed $value */
             $value = $this->headers->offsetGet($name);
 
             if (!\is_array($value)) {
-                return [\trim($value, " \t")];
+                return [\trim((string) $value, " \t")];
             }
 
             foreach ($value as $keyInner => $valueInner) {
@@ -271,7 +282,7 @@ class Response implements ResponseInterface
     }
 
     /**
-     * @return array
+     * @return array<string, string[]>
      */
     public function getHeaders(): array
     {
@@ -358,7 +369,7 @@ class Response implements ResponseInterface
      *
      * @return static
      */
-    public function withAddedHeader($name, $value)
+    public function withAddedHeader($name, $value): \Psr\Http\Message\MessageInterface
     {
         $new = clone $this;
 
@@ -367,7 +378,12 @@ class Response implements ResponseInterface
         }
 
         if ($new->headers->offsetExists($name)) {
-            $new->headers->forceSet($name, \array_merge_recursive($new->headers->offsetGet($name), $value));
+            /** @var mixed $currentValues */
+            $currentValues = $new->headers->offsetGet($name);
+            if (!\is_array($currentValues)) {
+                $currentValues = [$currentValues];
+            }
+            $new->headers->forceSet($name, \array_merge_recursive($currentValues, $value));
         } else {
             $new->headers->forceSet($name, $value);
         }
@@ -390,7 +406,7 @@ class Response implements ResponseInterface
      *
      * @return static
      */
-    public function withBody(StreamInterface $body)
+    public function withBody(StreamInterface $body): \Psr\Http\Message\MessageInterface
     {
         $new = clone $this;
 
@@ -416,7 +432,7 @@ class Response implements ResponseInterface
      *
      * @return static
      */
-    public function withHeader($name, $value)
+    public function withHeader($name, $value): \Psr\Http\Message\MessageInterface
     {
         $new = clone $this;
 
@@ -443,7 +459,7 @@ class Response implements ResponseInterface
      *
      * @return static
      */
-    public function withProtocolVersion($version)
+    public function withProtocolVersion($version): \Psr\Http\Message\MessageInterface
     {
         $new = clone $this;
 
@@ -475,7 +491,7 @@ class Response implements ResponseInterface
      *
      * @return static
      */
-    public function withStatus($code, $reasonPhrase = null)
+    public function withStatus($code, $reasonPhrase = null): ResponseInterface
     {
         $new = clone $this;
 
@@ -507,13 +523,88 @@ class Response implements ResponseInterface
      *
      * @return static
      */
-    public function withoutHeader($name)
+    public function withoutHeader($name): \Psr\Http\Message\MessageInterface
     {
         $new = clone $this;
 
         $new->headers->forceUnset($name);
 
         return $new;
+    }
+
+    /**
+     * @return float
+     */
+    private function _getTransferFloat(string $key): float
+    {
+        $value = $this->getTransferInfoValue($key);
+
+        return \is_numeric($value) ? (float) $value : 0.0;
+    }
+
+    /**
+     * @return int
+     */
+    private function _getTransferInt(string $key): int
+    {
+        $value = $this->getTransferInfoValue($key);
+
+        return \is_numeric($value) ? (int) $value : 0;
+    }
+
+    /**
+     * @return string|null
+     */
+    private function _getTransferString(string $key): ?string
+    {
+        $value = $this->getTransferInfoValue($key);
+        if (!\is_string($value) || $value === '') {
+            return null;
+        }
+
+        return $value;
+    }
+
+    /**
+     * @param mixed  $http_version
+     * @param string $fallback
+     *
+     * @return string
+     */
+    private static function _normalizeTransferHttpVersion($http_version, string $fallback): string
+    {
+        if (!\is_int($http_version)) {
+            if (\is_string($http_version) && $http_version !== '') {
+                return $http_version;
+            }
+
+            return $fallback;
+        }
+
+        $map = [
+            \CURL_HTTP_VERSION_NONE => $fallback,
+            \CURL_HTTP_VERSION_1_0  => Http::HTTP_1_0,
+            \CURL_HTTP_VERSION_1_1  => Http::HTTP_1_1,
+            \CURL_HTTP_VERSION_2_0  => Http::HTTP_2_0,
+        ];
+
+        if (\defined('CURL_HTTP_VERSION_2TLS')) {
+            $map[(int) \constant('CURL_HTTP_VERSION_2TLS')] = Http::HTTP_2_0;
+        }
+
+        if (\defined('CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE')) {
+            $map[(int) \constant('CURL_HTTP_VERSION_2_PRIOR_KNOWLEDGE')] = Http::HTTP_2_0;
+        }
+
+        if (\defined('CURL_HTTP_VERSION_3')) {
+            $map[(int) \constant('CURL_HTTP_VERSION_3')] = Http::HTTP_3;
+        }
+
+        if (\defined('CURL_HTTP_VERSION_3ONLY')) {
+            $map[(int) \constant('CURL_HTTP_VERSION_3ONLY')] = Http::HTTP_3;
+        }
+
+        return $map[$http_version] ?? $fallback;
     }
 
     /**
@@ -541,11 +632,95 @@ class Response implements ResponseInterface
     }
 
     /**
-     * @return array
+     * @return array<string, mixed>
      */
     public function getMetaData(): array
     {
         return $this->meta_data;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getTransferInfo(): array
+    {
+        return $this->getMetaData();
+    }
+
+    /**
+     * @param mixed|null $fallback
+     *
+     * @return mixed|null
+     */
+    public function getTransferInfoValue(string $key, $fallback = null)
+    {
+        return $this->meta_data[$key] ?? $fallback;
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getEffectiveUrl(): ?string
+    {
+        return $this->_getTransferString('url');
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getPrimaryIp(): ?string
+    {
+        return $this->_getTransferString('primary_ip');
+    }
+
+    /**
+     * @return string|null
+     */
+    public function getLocalIp(): ?string
+    {
+        return $this->_getTransferString('local_ip');
+    }
+
+    /**
+     * @return int
+     */
+    public function getRedirectCount(): int
+    {
+        return $this->_getTransferInt('redirect_count');
+    }
+
+    /**
+     * @return float
+     */
+    public function getTotalTime(): float
+    {
+        return $this->_getTransferFloat('total_time');
+    }
+
+    /**
+     * @return float
+     */
+    public function getConnectTime(): float
+    {
+        return $this->_getTransferFloat('connect_time');
+    }
+
+    /**
+     * @return float
+     */
+    public function getTlsHandshakeTime(): float
+    {
+        return $this->_getTransferFloat('appconnect_time');
+    }
+
+    /**
+     * @return string
+     */
+    public function getTransferHttpVersion(): string
+    {
+        $http_version = $this->getTransferInfoValue('http_version');
+
+        return self::_normalizeTransferHttpVersion($http_version, $this->getProtocolVersion());
     }
 
     /**
@@ -572,12 +747,9 @@ class Response implements ResponseInterface
         return $this->raw_headers;
     }
 
-    /**
-     * @return bool
-     */
     public function hasBody(): bool
     {
-        return !empty($this->body);
+        return $this->body->getSize()  > 0;
     }
 
     /**
@@ -596,6 +768,153 @@ class Response implements ResponseInterface
     public function hasErrors(): bool
     {
         return $this->code >= 400;
+    }
+
+    /**
+     * @return bool Did we receive a 1xx Informational response?
+     */
+    public function isInformational(): bool
+    {
+        return $this->code >= 100 && $this->code < 200;
+    }
+
+    /**
+     * @return bool Did we receive a 2xx Successful response?
+     */
+    public function isSuccess(): bool
+    {
+        return $this->code >= 200 && $this->code < 300;
+    }
+
+    /**
+     * @return bool Did we receive a 3xx Redirection response?
+     */
+    public function isRedirect(): bool
+    {
+        return $this->code >= 300 && $this->code < 400;
+    }
+
+    /**
+     * @return bool Did we receive a 4xx Client Error response?
+     */
+    public function isClientError(): bool
+    {
+        return $this->code >= 400 && $this->code < 500;
+    }
+
+    /**
+     * @return bool Did we receive a 5xx Server Error response?
+     */
+    public function isServerError(): bool
+    {
+        return $this->code >= 500 && $this->code < 600;
+    }
+
+    /**
+     * Returns a human-readable hint / explanation for the current HTTP status code.
+     *
+     * Useful when displaying or logging error information without having to
+     * hard-code status-code ranges in calling code.
+     *
+     * @return string
+     */
+    public function getErrorMessage(): string
+    {
+        if ($this->isSuccess()) {
+            return 'Request was successful (' . $this->code . ' ' . $this->reason . ').';
+        }
+
+        if ($this->isInformational()) {
+            return 'Informational response (' . $this->code . ' ' . $this->reason . '): the server acknowledged the request.';
+        }
+
+        if ($this->isRedirect()) {
+            return 'Redirect response (' . $this->code . ' ' . $this->reason . '): the resource has moved. Check the Location header.';
+        }
+
+        if ($this->isClientError()) {
+            $hints = [
+                400 => 'Bad Request: the server could not understand the request due to invalid syntax.',
+                401 => 'Unauthorized: authentication is required and has failed or not been provided.',
+                403 => 'Forbidden: you do not have permission to access this resource.',
+                404 => 'Not Found: the requested resource could not be found on the server.',
+                405 => 'Method Not Allowed: the HTTP method used is not supported for this endpoint.',
+                408 => 'Request Timeout: the server timed out waiting for the request.',
+                409 => 'Conflict: the request conflicts with the current state of the resource.',
+                410 => 'Gone: the resource has been permanently removed.',
+                422 => 'Unprocessable Entity: the request was well-formed but contains semantic errors.',
+                429 => 'Too Many Requests: you have exceeded the rate limit. Try again later.',
+            ];
+
+            $hint = $hints[$this->code] ?? 'Client Error: the request could not be fulfilled due to a client-side problem. Check your request parameters, headers and authentication.';
+
+            return $hint . ' (' . $this->code . ' ' . $this->reason . ')';
+        }
+
+        if ($this->isServerError()) {
+            $hints = [
+                500 => 'Internal Server Error: the server encountered an unexpected error. This is a server-side problem.',
+                501 => 'Not Implemented: the server does not support the functionality required to fulfil the request.',
+                502 => 'Bad Gateway: the server received an invalid response from an upstream server.',
+                503 => 'Service Unavailable: the server is temporarily unable to handle the request (overloaded or under maintenance).',
+                504 => 'Gateway Timeout: the upstream server did not respond in time.',
+            ];
+
+            $hint = $hints[$this->code] ?? 'Server Error: the server failed to fulfil the request. This is a server-side problem and is not caused by your request.';
+
+            return $hint . ' (' . $this->code . ' ' . $this->reason . ')';
+        }
+
+        return 'Unknown response status (' . $this->code . ' ' . $this->reason . ').';
+    }
+
+    /**
+     * Returns a human-readable debug summary that includes the original
+     * request (method, full URL with query params, request headers, request
+     * body) as well as the response (status, hint, response headers, response
+     * body).  Useful for logging, debugging, or building descriptive exception
+     * messages.
+     *
+     * @return string
+     */
+    public function debugInfo(): string
+    {
+        $lines = [];
+
+        // ---- Request section (available when the response was produced by a Request) ----
+        if ($this->request !== null) {
+            $lines[] = '--- Request ---';
+            $lines[] = $this->request->getMethod() . ' ' . (string) $this->request->getUri();
+
+            foreach ($this->request->getHeaders() as $name => $values) {
+                $lines[] = $name . ': ' . \implode(', ', (array) $values);
+            }
+
+            $requestBody = (string) $this->request->getBody();
+            if ($requestBody !== '') {
+                $lines[] = '';
+                $lines[] = $requestBody;
+            }
+
+            $lines[] = '';
+        }
+
+        // ---- Response section ----
+        $lines[] = '=== Response Debug Info ===';
+        $lines[] = 'Status : ' . $this->code . ' ' . $this->reason;
+        $lines[] = 'Hint   : ' . $this->getErrorMessage();
+        $lines[] = '';
+        $lines[] = '--- Response Headers ---';
+
+        foreach ($this->headers->toArray() as $name => $values) {
+            $lines[] = $name . ': ' . \implode(', ', (array) $values);
+        }
+
+        $lines[] = '';
+        $lines[] = '--- Response Body ---';
+        $lines[] = (string) $this->body;
+
+        return \implode("\n", $lines);
     }
 
     /**
@@ -639,19 +958,28 @@ class Response implements ResponseInterface
     private function _interpretHeaders()
     {
         // Parse the Content-Type and charset
+        /** @var mixed $content_type */
         $content_type = $this->headers['Content-Type'] ?? [];
-        foreach ($content_type as $content_type_inner) {
-            $content_type = \array_merge(\explode(';', $content_type_inner));
+        if (!\is_array($content_type)) {
+            $content_type = [$content_type];
         }
 
-        $this->content_type = $content_type[0] ?? '';
-        if (
-            \count($content_type) === 2
-            &&
-            \strpos($content_type[1], '=') !== false
-        ) {
-            /** @noinspection PhpUnusedLocalVariableInspection */
-            list($nill, $this->charset) = \explode('=', $content_type[1]);
+        $content_type_parts = [];
+        foreach ($content_type as $content_type_inner) {
+            if (!\is_string($content_type_inner)) {
+                continue;
+            }
+
+            $content_type_parts = \array_merge($content_type_parts, \explode(';', $content_type_inner));
+        }
+
+        $this->content_type = $content_type_parts[0] ?? '';
+        foreach (\array_slice($content_type_parts, 1) as $part) {
+            $part = \trim($part);
+            if (\stripos($part, 'charset=') === 0) {
+                $this->charset = \substr($part, 8);
+                break;
+            }
         }
 
         // fallback
@@ -701,7 +1029,10 @@ class Response implements ResponseInterface
             &&
             $this->request->hasParseCallback()
         ) {
-            return \call_user_func($this->request->getParseCallback(), $body);
+            $parseCallback = $this->request->getParseCallback();
+            if ($parseCallback !== null) {
+                return $parseCallback($body);
+            }
         }
 
         // Decide how to parse the body of the response in the following order:
